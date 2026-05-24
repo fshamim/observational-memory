@@ -1,0 +1,84 @@
+{
+  "enabled": true,
+  "observerModel": {
+    "provider": "openai-codex",
+    "modelId": "gpt-5.4-mini"
+  },
+  "reflectorModel": {
+    "provider": "openai-codex",
+    "modelId": "gpt-5.4-mini"
+  },
+  "compressionStrategy": "reobserve",
+  "observationTriggerContextPercent": 48,
+  "observationTargetContextPercent": 25,
+  "observationScopePercent": 50,
+  "preserveRecentMessages": 12,
+  "minObservationMessages": 10,
+  "reflectionTriggerContextPercent": 10,
+  "reflectionTargetContextPercent": 5,
+  "contextWindowSize": 250000,
+  "maxReflectionRetries": 3,
+  "observerPromptTokenLimit": 160000,
+  "reflectorPromptTokenLimit": 140000,
+  "observerTimeoutMs": 30000,
+  "reflectorTimeoutMs": 30000,
+  "observerMaxAttempts": 3,
+  "reflectorMaxAttempts": 3,
+  "retryBaseDelayMs": 5000,
+  "retryMaxDelayMs": 60000,
+  "errorNotifyCooldownMs": 60000,
+  "footerRenderThrottleMs": 1250,
+  "footerUsagePollIntervalMs": 300000,
+  "cacheOptimization": {
+    "enabled": true,
+    "maxPromptContextPercent": 60,
+    "snapshotTokenBudget": 12000,
+    "activeTailTokenBudget": 2500,
+    "minCheckpointTurns": 6,
+    "minCheckpointMs": 300000
+  },
+  "sessionRollover": {
+    "enabled": true,
+    "warnBytes": 157286400,
+    "targetBytes": 209715200,
+    "hardBytes": 262144000,
+    "legacyRecoveryCandidateBytes": 314572800,
+    "minProjectedSavingsBytes": 52428800
+  },
+  "oversizedEntries": {
+    "entryBytes": 8388608,
+    "stubPreviewChars": 1500,
+    "trimWorkflowToolResults": true
+  },
+  "archive": {
+    "targetChunkBytes": 67108864,
+    "maxChunkBytes": 134217728,
+    "preserveOriginalSessionFile": true
+  },
+  "experienceBank": {
+    "enabled": true,
+    "maxInjectedExperiences": 3,
+    "minScoreToInject": 20,
+    "maxTextChars": 240
+  },
+  "rawMessages": {
+    "observeThresholdPercent": 49,
+    "oldestScopePercent": 25
+  },
+  "observations": {
+    "reobserveThresholdPercent": 15,
+    "oldestScopePercent": 25
+  },
+  "reflections": {
+    "reobserveThresholdPercent": 10,
+    "archiveOldToMemoryMd": true,
+    "memoryMdPath": "MEMORY.md"
+  },
+  "experiences": {
+    "enabled": true,
+    "generateAfter": "observations",
+    "maxOpsPerObservation": 4,
+    "maxWords": 64,
+    "mergeSimilarityThreshold": 0.7
+  }
+}
