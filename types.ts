@@ -50,6 +50,8 @@ export interface ObservationQueueConfig {
 export interface ReflectionQueueConfig {
 	reobserveThresholdPercent: number;
 	archiveOldToMemoryMd: boolean;
+	archiveThresholdPercent: number;
+	archivePlaceholderTokenBudget: number;
 	memoryMdPath: string;
 }
 
@@ -328,6 +330,14 @@ export const DEFAULT_CONFIG: ObservationalMemoryConfig = {
 		// memory survives beyond the current session file.
 		archiveOldToMemoryMd: true,
 
+		// Archive only once active reflection text grows past this threshold.
+		// Placeholders do not count toward this total.
+		archiveThresholdPercent: 10,
+
+		// Keep only a tiny rolling budget of archive placeholders in prompt-
+		// visible memory. Full detail remains in MEMORY.md.
+		archivePlaceholderTokenBudget: 256,
+
 		// Relative path where archived reflection memory is written.
 		memoryMdPath: "MEMORY.md",
 	},
@@ -385,6 +395,8 @@ export interface OmReflectionItem {
 	sourceObservationIds?: string[];
 	refreshedFromReflectionIds?: string[];
 	archivedToMemoryMdHash?: string;
+	archivedToMemoryMdPath?: string;
+	placeholder?: boolean;
 }
 
 export interface OmExperienceItem {

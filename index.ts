@@ -6,7 +6,7 @@ import type {
 	ObservationDiagnosticEntry,
 } from "./types";
 import { CUSTOM_ENTRY_TYPE, DIAGNOSTIC_ENTRY_TYPE, ROLLOVER_ENTRY_TYPE } from "./types";
-import { loadConfig } from "./config";
+import { ensureProjectConfigFile, loadConfig } from "./config";
 import { estimateStringTokens, estimateMessagesTokens } from "./token-estimator";
 import { requireModelAuth, type RequestAuth, type CompatibleModelRegistry } from "./auth";
 import {
@@ -961,6 +961,7 @@ async function probeCodexQuotaViaBackendUsageApi(
 }
 
 export default function observationalMemoryExtension(pi: ExtensionAPI): void {
+	ensureProjectConfigFile();
 	let config = loadConfig();
 	if (!config.enabled) return;
 
@@ -1038,6 +1039,13 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 		sawAssistantError: boolean;
 	} | null = null;
 	const backgroundControllers = new Set<AbortController>();
+
+	function ensureProjectConfigBootstrap(cwd?: string): void {
+		const result = ensureProjectConfigFile(cwd || process.cwd());
+		if (result.error) {
+			notifyOm(`Observational memory config bootstrap failed: ${truncateInline(result.error, 160)}`, "warning");
+		}
+	}
 
 	function reloadRuntimeConfig(cwd?: string): void {
 		config = loadConfig(cwd || process.cwd());
@@ -1437,12 +1445,6 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 			String(footerState.toolDefinitionTokens),
 			String(footerState.observationTokens),
 			String(footerState.reflectionTokens),
-			footerState.codexAccountName,
-			footerState.codexPlanType,
-			String(footerState.codex5hRemainingPercent ?? ""),
-			String(footerState.codex7dRemainingPercent ?? ""),
-			String(footerState.codex5hResetAtMs ?? ""),
-			String(footerState.codex7dResetAtMs ?? ""),
 			footerState.omStatus,
 			footerState.omError,
 			String(footerState.mcpServerCount),
@@ -2163,37 +2165,18 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 		return text;
 	}
 
-	function buildUsageAndThinkingStatus(): string {
+	function buildThinkingStatus(): string {
 		const level = footerState.thinkingLevel || "off";
 		const length = footerState.thinkingLength ? `/${footerState.thinkingLength}` : "";
-		const thinkingPart = `${level}${length}`;
-
-		const usageParts: string[] = [];
-		if (typeof footerState.codex5hRemainingPercent === "number") {
-			const p = Math.max(0, Math.min(100, Math.round(footerState.codex5hRemainingPercent)));
-			const color: "error" | "warning" | "success" = p <= 20 ? "error" : p <= 50 ? "warning" : "success";
-			usageParts.push(`5h:${styleStatus(color, `${p}%`)}`);
-		}
-		if (typeof footerState.codex7dRemainingPercent === "number") {
-			const p = Math.max(0, Math.min(100, Math.round(footerState.codex7dRemainingPercent)));
-			const color: "error" | "warning" | "success" = p <= 20 ? "error" : p <= 50 ? "warning" : "success";
-			usageParts.push(`7d:${styleStatus(color, `${p}%`)}`);
-		}
-		const usagePart = usageParts.length > 0 ? usageParts.join(" ") : styleStatus("dim", "usage:--");
-		const accountPart = footerState.codexAccountName
-			? styleStatus("dim", `${truncateInline(footerState.codexAccountName, 14)}`)
-			: "";
-
-		const full = [thinkingPart, accountPart, usagePart].filter(Boolean).join(" · ");
-		return full.length <= 96 ? full : thinkingPart;
+		return `${level}${length}`;
 	}
 
 	function publishExtensionStatus(activityStatus?: string): void {
 		if (!currentCtx?.hasUI) return;
-		const usageThinkingStatus = buildUsageAndThinkingStatus();
+		const thinkingStatus = buildThinkingStatus();
 		const statusText = activityStatus
-			? `${activityStatus} · ${usageThinkingStatus}`
-			: usageThinkingStatus;
+			? `${activityStatus} · ${thinkingStatus}`
+			: thinkingStatus;
 		if (statusText === lastFooterStatusText) {
 			return;
 		}
@@ -2661,6 +2644,7 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 		shuttingDown = false;
 		stopFooterUsagePolling();
 		rememberContext(ctx);
+		ensureProjectConfigBootstrap(ctx?.cwd);
 		reloadRuntimeConfig(ctx?.cwd);
 		for (const controller of Array.from(backgroundControllers)) {
 			if (!controller.signal.aborted) {
@@ -3323,6 +3307,7 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 						`  Observation→reflection trigger: observations >= ${thresholds.reflectionTriggerPercent}% (~${thresholds.reflectionTriggerTokens} tokens)`,
 						`  Reflection refresh trigger: reflections >= ${thresholds.reflectionRefreshTriggerPercent}% (~${thresholds.reflectionRefreshTriggerTokens} tokens)`,
 						`  Reflection archive to MEMORY.md: ${config.reflections.archiveOldToMemoryMd ? `on (${config.reflections.memoryMdPath})` : "off"}`,
+						`  Reflection archive threshold/placeholders: ${config.reflections.archiveThresholdPercent}% / ${config.reflections.archivePlaceholderTokenBudget} tokens`,
 						`  Observer prompt limit: ${config.observerPromptTokenLimit} tokens`,
 						`  Reflector prompt limit: ${config.reflectorPromptTokenLimit} tokens`,
 						`  Observer timeout: ${config.observerTimeoutMs}ms`,

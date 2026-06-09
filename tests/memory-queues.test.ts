@@ -6,6 +6,7 @@ import {
 	computeQueueTokenTotals,
 	createInitialOmState,
 	normalizeOmState,
+	replaceReflectionsAfterArchive,
 	selectOldestObservationBatch,
 	selectOldestRawMessageBatch,
 	serializeOmState,
@@ -75,6 +76,28 @@ describe("memory queues", () => {
 		expect(state.activeObservations).not.toContain("obs one");
 	});
 
+	test("reflection archive placeholders stay prompt-visible but out of active reflection totals", () => {
+		const state = createInitialOmState();
+		appendReflectionFromObservations({
+			state,
+			reflectionText: "reflection one",
+			consumedObservationIds: [],
+		});
+		replaceReflectionsAfterArchive({
+			state,
+			reflectionText: "refreshed reflection",
+			archivedHash: "hash-1234567890",
+			archivedPath: "MEMORY.md",
+			placeholderTokenBudget: 256,
+		});
+		expect(state.reflections).toHaveLength(2);
+		expect(state.reflections[0]!.placeholder).toBe(true);
+		expect(state.reflections[0]!.text).toContain("OM_REFLECTION_ARCHIVE");
+		expect(state.reflections[1]!.text).toBe("refreshed reflection");
+		expect(state.totalReflectionTokens).toBe(state.reflections[1]!.tokenCount);
+		expect(state.compactedObservations).toBe("refreshed reflection");
+	});
+
 	test("serialized state writes canonical queue fields only", () => {
 		const state = createInitialOmState();
 		appendObservationResult({ state, observationText: "obs one", messageStartIndex: 0, messageEndIndex: 2 });
@@ -83,6 +106,13 @@ describe("memory queues", () => {
 			reflectionText: "reflection one",
 			consumedObservationIds: state.observations.map((item) => item.id),
 		});
+		replaceReflectionsAfterArchive({
+			state,
+			reflectionText: "refreshed reflection",
+			archivedHash: "hash-1234567890",
+			archivedPath: "MEMORY.md",
+			placeholderTokenBudget: 256,
+		});
 		const serialized = serializeOmState(state);
 		expect(serialized.schemaVersion).toBe(2);
 		expect(serialized.rawMessageCursor).toBe(2);
@@ -90,5 +120,7 @@ describe("memory queues", () => {
 		expect(serialized).not.toHaveProperty("compactedObservations");
 		expect(serialized).not.toHaveProperty("lastObservedMessageIndex");
 		expect(serialized).not.toHaveProperty("totalCompactedTokens");
+		expect((serialized.reflections as any[])[0]).toHaveProperty("placeholder", true);
+		expect((serialized.reflections as any[])[0]).toHaveProperty("archivedToMemoryMdPath", "MEMORY.md");
 	});
 });

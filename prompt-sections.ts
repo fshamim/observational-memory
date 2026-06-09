@@ -1,6 +1,10 @@
 import { takeTailWithinTokenBudget } from "./chunking";
 import { formatExperiencesForPrompt } from "./lib/experience-bank";
-import { formatObservationItems, formatReflectionItems } from "./memory-queues";
+import {
+	formatActiveReflectionItems,
+	formatArchivedReflectionPlaceholderItems,
+	formatObservationItems,
+} from "./memory-queues";
 import type { ExperienceRecord, ObservationState, ObservationalMemoryConfig } from "./types";
 
 export function buildObservationPromptSections(args: {
@@ -10,16 +14,24 @@ export function buildObservationPromptSections(args: {
 }): string[] {
 	const sections: string[] = [];
 	const cacheEnabled = args.config.cacheOptimization.enabled;
-	const reflectionsText = formatReflectionItems(args.state.reflections);
+	const reflectionPlaceholderText = formatArchivedReflectionPlaceholderItems(
+		args.state.reflections,
+		args.config.reflections.archivePlaceholderTokenBudget,
+	);
+	const reflectionActiveBudget = cacheEnabled
+		? Math.max(0, args.config.cacheOptimization.snapshotTokenBudget - args.config.reflections.archivePlaceholderTokenBudget)
+		: args.config.cacheOptimization.snapshotTokenBudget;
+	const reflectionsText = formatActiveReflectionItems(args.state.reflections);
 	const reflectionsForPrompt = cacheEnabled
-		? takeTailWithinTokenBudget(reflectionsText, args.config.cacheOptimization.snapshotTokenBudget)
+		? takeTailWithinTokenBudget(reflectionsText, reflectionActiveBudget)
 		: reflectionsText;
-	if (reflectionsForPrompt) {
+	const combinedReflectionText = [reflectionsForPrompt, reflectionPlaceholderText].filter(Boolean).join("\n\n").trim();
+	if (combinedReflectionText) {
 		sections.push(
 			"## Reflections",
 			"Trust current messages over these memories if they conflict.",
 			"",
-			reflectionsForPrompt,
+			combinedReflectionText,
 		);
 	}
 	if (args.experiences.length > 0) {

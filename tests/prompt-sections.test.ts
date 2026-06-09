@@ -7,6 +7,7 @@ describe("prompt sections", () => {
 	test("orders reflections before experiences before observations", () => {
 		const state = createInitialOmState();
 		state.reflections.push({ id: "R000001", text: "older reflection", tokenCount: 3, createdAt: new Date().toISOString(), generation: 1 });
+		state.reflections.push({ id: "R000002", text: "[OM_REFLECTION_ARCHIVE abc123def456] Archived prior reflection details in MEMORY.md.", tokenCount: 8, createdAt: new Date().toISOString(), generation: 1, placeholder: true, archivedToMemoryMdHash: "abc123def456", archivedToMemoryMdPath: "MEMORY.md" });
 		state.observations.push({ id: "O000001", text: "new observation", tokenCount: 3, createdAt: new Date().toISOString(), source: { messageStartIndex: 0, messageEndIndex: 1 } });
 		state.activeObservations = "new observation";
 		state.compactedObservations = "older reflection";
@@ -36,5 +37,6 @@ describe("prompt sections", () => {
 		const joined = sections.join("\n");
 		expect(joined.indexOf("## Reflections")).toBeLessThan(joined.indexOf("## Actionable Tool-Use Experiences"));
 		expect(joined.indexOf("## Actionable Tool-Use Experiences")).toBeLessThan(joined.indexOf("## Active Observations"));
+		expect(joined).toContain("OM_REFLECTION_ARCHIVE abc123def456");
 	});
 });

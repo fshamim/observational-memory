@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { createHash } from "node:crypto";
 import type { OmReflectionItem } from "./types";
 import { formatReflectionItems } from "./memory-queues";
+export { buildReflectionArchivePlaceholder, isReflectionArchivePlaceholderText, shortenReflectionArchiveHash } from "./reflection-archive-placeholder";
 
 function expandHome(filePath: string): string {
 	if (!filePath.startsWith("~")) return filePath;

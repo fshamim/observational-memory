@@ -24,6 +24,36 @@ export function getProjectConfigPath(cwd = process.cwd()): string {
 	return path.join(cwd, ".pi", "observational-memory.json");
 }
 
+export function stringifyDefaultConfig(): string {
+	return `${JSON.stringify(DEFAULT_CONFIG, null, 2)}\n`;
+}
+
+export function ensureProjectConfigFile(cwd = process.cwd()): {
+	path: string;
+	created: boolean;
+	error?: string;
+} {
+	const filePath = getProjectConfigPath(cwd);
+	try {
+		if (fs.existsSync(filePath)) {
+			return { path: filePath, created: false };
+		}
+		fs.mkdirSync(path.dirname(filePath), { recursive: true });
+		fs.writeFileSync(filePath, stringifyDefaultConfig(), { flag: "wx" });
+		return { path: filePath, created: true };
+	} catch (error) {
+		const code = typeof error === "object" && error && "code" in error ? String((error as any).code || "") : "";
+		if (code === "EEXIST") {
+			return { path: filePath, created: false };
+		}
+		return {
+			path: filePath,
+			created: false,
+			error: error instanceof Error ? error.message : String(error),
+		};
+	}
+}
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
 	return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
@@ -184,6 +214,8 @@ function resolveReflectionsConfig(merged: Record<string, unknown>): ReflectionQu
 	return {
 		reobserveThresholdPercent: clampNumber(raw.reobserveThresholdPercent, DEFAULT_CONFIG.reflections.reobserveThresholdPercent, 1, 95),
 		archiveOldToMemoryMd: asBoolean(raw.archiveOldToMemoryMd, DEFAULT_CONFIG.reflections.archiveOldToMemoryMd),
+		archiveThresholdPercent: clampNumber(raw.archiveThresholdPercent, DEFAULT_CONFIG.reflections.archiveThresholdPercent, 1, 95),
+		archivePlaceholderTokenBudget: clampNumber(raw.archivePlaceholderTokenBudget, DEFAULT_CONFIG.reflections.archivePlaceholderTokenBudget, 0, 8192),
 		memoryMdPath: asString(raw.memoryMdPath, DEFAULT_CONFIG.reflections.memoryMdPath),
 	};
 }

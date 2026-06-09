@@ -72,6 +72,8 @@
   "reflections": {
     "reobserveThresholdPercent": 10,
     "archiveOldToMemoryMd": true,
+    "archiveThresholdPercent": 10,
+    "archivePlaceholderTokenBudget": 256,
     "memoryMdPath": "MEMORY.md"
   },
   "experiences": {

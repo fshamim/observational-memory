@@ -18,14 +18,17 @@ pi -e extensions/observational-memory/index.ts
 
 ## Config files
 
-OM does **not** auto-create a config file on startup.
+OM always has built-in defaults from `types.ts`.
 
-That is intentional: OM always has built-in defaults, and config files are optional override layers.
+On first load, OM now **auto-generates** a project-local config file at:
 
-Supported config file locations:
+- project: `<project>/.pi/observational-memory.json`
+
+That generated file is a full copy of the current defaults, so users have something concrete to inspect and edit immediately.
+
+OM also supports an optional global override file at:
 
 - global: `~/.pi/agent/extensions/observational-memory/config.json`
-- project: `<project>/.pi/observational-memory.json`
 
 ### Precedence
 
@@ -53,7 +56,9 @@ Minimal project-local override:
     "oldestScopePercent": 25
   },
   "reflections": {
-    "reobserveThresholdPercent": 10
+    "reobserveThresholdPercent": 10,
+    "archiveThresholdPercent": 10,
+    "archivePlaceholderTokenBudget": 256
   }
 }
 ```
@@ -452,6 +457,21 @@ These are the most important current knobs for compaction in `reobserve` mode.
 - default: `true`
 - type: boolean
 - enables archiving older reflections into durable `MEMORY.md`
+- archived reflection detail is replaced in prompt-visible memory with a tiny hash-id placeholder
+
+#### `reflections.archiveThresholdPercent`
+- default: `10`
+- type: number
+- minimum active-reflection context percent before a reflection refresh also archives the pre-refresh reflection body to `MEMORY.md`
+- placeholder lines do not count toward this threshold
+- clamp range: `1..95`
+
+#### `reflections.archivePlaceholderTokenBudget`
+- default: `256`
+- type: number
+- rolling token budget reserved for prompt-visible archive placeholders like `[OM_REFLECTION_ARCHIVE abc123...]`
+- older placeholders fall out of the in-prompt reflection section once this budget is exceeded, but remain in `MEMORY.md`
+- clamp range: `0..8192`
 
 #### `reflections.memoryMdPath`
 - default: `"MEMORY.md"`
