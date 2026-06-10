@@ -1,9 +1,10 @@
 /**
- * Custom 2-line footer for pi-coding-agent with context visualization,
- * git info, and observational memory awareness.
+ * Custom 2-3 line footer for pi-coding-agent with context visualization,
+ * git info, observational memory awareness, and pass-through extension statuses.
  *
  * Line 1: model + context meter + context composition legend (sys/tools/exp/obs/ref/msg)
  * Line 2: cwd/branch/diff + MCP/OM status
+ * Line 3: other extension statuses (when present)
  *
  * Uses Nerd Font icons — ensure your terminal font supports them.
  */
@@ -117,6 +118,15 @@ const ICON = {
 
 function fg256(color: number, text: string): string {
 	return `\x1b[38;5;${color}m${text}\x1b[39m`;
+}
+
+function sanitizeStatusText(text: string): string {
+	return text
+		.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "")
+		.replace(/[\r\n\t]/g, " ")
+		.replace(/[\x00-\x1F\x7F]/g, "")
+		.replace(/ +/g, " ")
+		.trim();
 }
 
 // =============================================================================
@@ -389,18 +399,13 @@ class CustomFooterComponent implements Component {
 			String(s.observationTokens),
 			String(s.experienceTokens),
 			String(s.reflectionTokens),
-			s.codexAccountName,
-			s.codexPlanType,
-			String(s.codex5hRemainingPercent ?? ""),
-			String(s.codex7dRemainingPercent ?? ""),
-			String(s.codex5hResetAtMs ?? ""),
-			String(s.codex7dResetAtMs ?? ""),
 			s.omStatus,
 			s.omError,
 			String(s.mcpServerCount),
 			String(s.diffAdded),
 			String(s.diffRemoved),
 			s.isWorktree ? "1" : "0",
+			this.getOtherExtensionStatusText(),
 		].join("|");
 	}
 
@@ -433,6 +438,10 @@ class CustomFooterComponent implements Component {
 			this.renderLine1(width),
 			this.renderLine2(width),
 		];
+		const extensionStatusLine = this.renderExtensionStatusLine(width);
+		if (extensionStatusLine) {
+			lines.push(extensionStatusLine);
+		}
 		this.cachedRenderKey = key;
 		this.cachedRenderLines = lines;
 		return lines;
@@ -540,9 +549,6 @@ class CustomFooterComponent implements Component {
 		if (budget <= 0) return "";
 
 		const sections: string[] = [];
-		const usageSection = this.buildUsageSummary();
-		if (usageSection) sections.push(usageSection);
-
 		const mcpSection = this.buildMcpSummary();
 		if (mcpSection) sections.push(mcpSection);
 
@@ -557,30 +563,27 @@ class CustomFooterComponent implements Component {
 		);
 	}
 
-	private buildUsageSummary(): string {
-		const s = this.state;
-		const formatWindow = (label: string, value: number | null, resetAtMs: number | null): string => {
-			const labelStr = this.theme.fg("dim", `${label}:`);
-			const resetStr = typeof resetAtMs === "number"
-				? this.theme.fg("dim", `(${formatResetCountdown(resetAtMs)})`)
-				: "";
-			if (typeof value !== "number") {
-				return `${labelStr}${this.theme.fg("dim", "--")}${resetStr ? ` ${resetStr}` : ""}`;
-			}
-			const p = clampPercent(value);
-			const color: "error" | "warning" | "success" = p <= 20 ? "error" : p <= 50 ? "warning" : "success";
-			return `${labelStr}${this.theme.fg(color, `${p}%`)}${resetStr ? ` ${resetStr}` : ""}`;
-		};
-
-		const account = s.codexAccountName ? compactInline(s.codexAccountName, 14) : "?";
-		const accountStr = this.theme.fg("dim", `${account}`);
-		return `${accountStr} ${formatWindow("5h", s.codex5hRemainingPercent, s.codex5hResetAtMs)} ${formatWindow("7d", s.codex7dRemainingPercent, s.codex7dResetAtMs)}`;
-	}
-
 	private buildMcpSummary(): string {
 		const s = this.state;
 		if (s.mcpServerCount <= 0) return "";
 		return fg256(37, `${ICON.network} ${s.mcpServerCount} • mcp`);
+	}
+
+	private getOtherExtensionStatusText(): string {
+		const statuses = this.footerData.getExtensionStatuses();
+		if (!statuses || statuses.size <= 0) return "";
+		const entries = Array.from(statuses.entries()) as Array<[string, string]>;
+		const parts = entries
+			.filter(([key, text]) => key !== "observational-memory" && typeof text === "string" && text.trim().length > 0)
+			.sort(([a], [b]) => a.localeCompare(b))
+			.map(([, text]) => sanitizeStatusText(text));
+		return parts.join(" ").trim();
+	}
+
+	private renderExtensionStatusLine(width: number): string {
+		const text = this.getOtherExtensionStatusText();
+		if (!text) return "";
+		return truncateToWidth(text, width, this.theme.fg("dim", "..."));
 	}
 
 	private buildOmSummary(): string {

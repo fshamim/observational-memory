@@ -2,7 +2,12 @@ import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { appendReflectionsToMemoryMd, resolveMemoryMdPath } from "../memory-md";
+import {
+	appendReflectionsToMemoryMd,
+	buildReflectionArchivePlaceholder,
+	isReflectionArchivePlaceholderText,
+	resolveMemoryMdPath,
+} from "../memory-md";
 
 const tempDirs: string[] = [];
 
@@ -13,6 +18,13 @@ afterEach(() => {
 });
 
 describe("memory.md archiving", () => {
+	test("builds a stable prompt-visible archive placeholder", () => {
+		const text = buildReflectionArchivePlaceholder({ hash: "abcdef1234567890", memoryMdPath: "MEMORY.md" });
+		expect(text).toContain("OM_REFLECTION_ARCHIVE abcdef123456");
+		expect(text).toContain("MEMORY.md");
+		expect(isReflectionArchivePlaceholderText(text)).toBeTrue();
+	});
+
 	test("appends a deduplicated reflection archive block", async () => {
 		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "om-memory-md-"));
 		tempDirs.push(cwd);

@@ -3,6 +3,7 @@ import { appendReflectionsToMemoryMd } from "./memory-md";
 import {
 	appendReflectionFromObservations,
 	computeQueueTokenTotals,
+	getActiveReflectionItems,
 	getReflectionText,
 	getReflectionTokenTotal,
 	hasObservationItems,
@@ -146,18 +147,23 @@ export async function executeReflectionPlan(args: {
 		inputText = batch.text;
 		sourceObservationIds = batch.items.map((item) => item.id);
 	} else {
+		const activeReflections = getActiveReflectionItems(args.state);
 		previousReflectionText = getReflectionText(args.state).trim();
-		if (!previousReflectionText) {
+		if (!previousReflectionText || activeReflections.length === 0) {
 			return false;
 		}
 		inputText = previousReflectionText;
-		if (args.config.reflections.archiveOldToMemoryMd) {
+		const archiveThresholdTokens = Math.max(
+			1,
+			Math.floor(args.plan.thresholds.contextWindow * (Math.max(1, Math.min(100, args.config.reflections.archiveThresholdPercent)) / 100)),
+		);
+		if (args.config.reflections.archiveOldToMemoryMd && args.state.totalReflectionTokens >= archiveThresholdTokens) {
 			const archived = await appendArchive({
 				cwd: args.cwd,
 				configuredPath: args.config.reflections.memoryMdPath,
 				sessionName: args.sessionName,
 				generation: args.state.generationCount,
-				reflections: args.state.reflections,
+				reflections: activeReflections,
 			});
 			archivedHash = archived.hash;
 		}
@@ -219,6 +225,8 @@ export async function executeReflectionPlan(args: {
 					state: args.state,
 					reflectionText: compactedText,
 					archivedHash,
+					archivedPath: archivedHash ? args.config.reflections.memoryMdPath : undefined,
+					placeholderTokenBudget: args.config.reflections.archivePlaceholderTokenBudget,
 				});
 			}
 			computeQueueTokenTotals(args.state);

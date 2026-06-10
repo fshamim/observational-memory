@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { buildReflectionArchivePlaceholder, isReflectionArchivePlaceholderText } from "./reflection-archive-placeholder";
 import { estimateMessagesTokens, estimateStringTokens } from "./token-estimator";
 import type {
 	ObservationState,
@@ -33,6 +34,27 @@ function normalizeNumber(value: unknown, fallback = 0): number {
 	return typeof value === "number" && Number.isFinite(value)
 		? Math.max(0, Math.floor(value))
 		: fallback;
+}
+
+export function isArchivedReflectionPlaceholder(item: Pick<OmReflectionItem, "text" | "placeholder">): boolean {
+	return Boolean(item.placeholder || isReflectionArchivePlaceholderText(item.text));
+}
+
+function takeRecentReflectionItemsWithinTokenBudget(items: OmReflectionItem[], tokenBudget: number): OmReflectionItem[] {
+	const budget = Math.max(0, Math.floor(tokenBudget));
+	if (items.length === 0 || budget <= 0) return [];
+	const kept: OmReflectionItem[] = [];
+	let total = 0;
+	for (let index = items.length - 1; index >= 0; index--) {
+		const item = items[index]!;
+		const itemTokens = Math.max(1, item.tokenCount || estimateStringTokens(normalizeText(item.text)));
+		if (kept.length > 0 && total + itemTokens > budget) {
+			break;
+		}
+		kept.unshift(item);
+		total += itemTokens;
+	}
+	return kept;
 }
 
 function normalizeObservationItem(raw: any, fallbackId: string): OmObservationItem | null {
@@ -72,6 +94,11 @@ function normalizeReflectionItem(raw: any, fallbackId: string): OmReflectionItem
 			typeof raw?.archivedToMemoryMdHash === "string" && raw.archivedToMemoryMdHash
 				? raw.archivedToMemoryMdHash
 				: undefined,
+		archivedToMemoryMdPath:
+			typeof raw?.archivedToMemoryMdPath === "string" && raw.archivedToMemoryMdPath
+				? raw.archivedToMemoryMdPath
+				: undefined,
+		placeholder: typeof raw?.placeholder === "boolean" ? raw.placeholder : isReflectionArchivePlaceholderText(text),
 	};
 }
 
@@ -113,6 +140,25 @@ export function formatReflectionItems(items: OmReflectionItem[]): string {
 	return items.map((item) => normalizeText(item.text)).filter(Boolean).join("\n\n").trim();
 }
 
+export function getActiveReflectionItems(state: ObservationState): OmReflectionItem[] {
+	return state.reflections.filter((item) => !isArchivedReflectionPlaceholder(item));
+}
+
+export function getArchivedReflectionPlaceholders(state: ObservationState): OmReflectionItem[] {
+	return state.reflections.filter((item) => isArchivedReflectionPlaceholder(item));
+}
+
+export function formatActiveReflectionItems(items: OmReflectionItem[]): string {
+	return formatReflectionItems(items.filter((item) => !isArchivedReflectionPlaceholder(item)));
+}
+
+export function formatArchivedReflectionPlaceholderItems(items: OmReflectionItem[], tokenBudget: number): string {
+	return formatReflectionItems(takeRecentReflectionItemsWithinTokenBudget(
+		items.filter((item) => isArchivedReflectionPlaceholder(item)),
+		tokenBudget,
+	));
+}
+
 export function getObservationCursor(state: ObservationState): number {
 	return Math.max(0, Math.floor(state.rawMessageCursor || state.lastObservedMessageIndex || 0));
 }
@@ -122,7 +168,7 @@ export function getObservationText(state: ObservationState): string {
 }
 
 export function getReflectionText(state: ObservationState): string {
-	return formatReflectionItems(state.reflections) || normalizeText(state.compactedObservations);
+	return formatActiveReflectionItems(state.reflections) || normalizeText(state.compactedObservations);
 }
 
 export function getReflectionTokenTotal(state: ObservationState): number {
@@ -134,7 +180,7 @@ export function hasObservationItems(state: ObservationState): boolean {
 }
 
 export function hasReflectionItems(state: ObservationState): boolean {
-	return state.reflections.length > 0 || getReflectionText(state).length > 0;
+	return getActiveReflectionItems(state).length > 0 || getReflectionText(state).length > 0;
 }
 
 export function computeQueueTokenTotals(state: ObservationState): ObservationState {
@@ -148,12 +194,13 @@ export function computeQueueTokenTotals(state: ObservationState): ObservationSta
 	for (const item of state.reflections) {
 		item.text = normalizeText(item.text);
 		item.tokenCount = estimateStringTokens(item.text);
+		item.placeholder = isArchivedReflectionPlaceholder(item);
 	}
 	for (const item of state.experiences) {
 		item.text = normalizeText(item.text);
 	}
 	state.totalObservationTokens = state.observations.reduce((sum, item) => sum + item.tokenCount, 0);
-	state.totalReflectionTokens = state.reflections.reduce((sum, item) => sum + item.tokenCount, 0);
+	state.totalReflectionTokens = getActiveReflectionItems(state).reduce((sum, item) => sum + item.tokenCount, 0);
 	state.totalExperienceTokens = state.experiences.reduce((sum, item) => sum + estimateStringTokens(item.text), 0);
 	state.activeObservations = getObservationText(state);
 	state.compactedObservations = getReflectionText(state);
@@ -189,6 +236,8 @@ export function serializeOmState(state: ObservationState): Record<string, unknow
 			...(item.sourceObservationIds?.length ? { sourceObservationIds: [...item.sourceObservationIds] } : {}),
 			...(item.refreshedFromReflectionIds?.length ? { refreshedFromReflectionIds: [...item.refreshedFromReflectionIds] } : {}),
 			...(item.archivedToMemoryMdHash ? { archivedToMemoryMdHash: item.archivedToMemoryMdHash } : {}),
+			...(item.archivedToMemoryMdPath ? { archivedToMemoryMdPath: item.archivedToMemoryMdPath } : {}),
+			...(item.placeholder ? { placeholder: true } : {}),
 		})),
 		experiences: state.experiences.map((item) => ({
 			id: item.id,
@@ -329,6 +378,8 @@ export function createReflectionItem(
 		refreshedFromReflectionIds?: string[];
 		createdAt?: string;
 		archivedToMemoryMdHash?: string;
+		archivedToMemoryMdPath?: string;
+		placeholder?: boolean;
 		id?: string;
 	},
 ): OmReflectionItem {
@@ -342,6 +393,8 @@ export function createReflectionItem(
 		sourceObservationIds: params.sourceObservationIds,
 		refreshedFromReflectionIds: params.refreshedFromReflectionIds,
 		archivedToMemoryMdHash: params.archivedToMemoryMdHash,
+		archivedToMemoryMdPath: params.archivedToMemoryMdPath,
+		placeholder: params.placeholder ?? isReflectionArchivePlaceholderText(normalized),
 	};
 }
 
@@ -393,19 +446,42 @@ export function replaceReflectionsAfterArchive(args: {
 	state: ObservationState;
 	reflectionText: string;
 	archivedHash?: string;
+	archivedPath?: string;
+	placeholderTokenBudget?: number;
 	createdAt?: string;
 }): ObservationState {
 	const text = normalizeText(args.reflectionText);
 	if (!text) return computeQueueTokenTotals(args.state);
-	const previousIds = args.state.reflections.map((item) => item.id);
+	const previousIds = getActiveReflectionItems(args.state).map((item) => item.id);
+	const idLedger = [...args.state.reflections];
+	const placeholderItems = [...getArchivedReflectionPlaceholders(args.state)];
+	if (args.archivedHash && args.archivedPath) {
+		const placeholderItem = createReflectionItem(
+			buildReflectionArchivePlaceholder({ hash: args.archivedHash, memoryMdPath: args.archivedPath }),
+			{
+				id: nextId("R", idLedger),
+				generation: Math.max(1, args.state.generationCount || 1),
+				archivedToMemoryMdHash: args.archivedHash,
+				archivedToMemoryMdPath: args.archivedPath,
+				placeholder: true,
+				createdAt: args.createdAt,
+			},
+		);
+		idLedger.push(placeholderItem);
+		placeholderItems.push(placeholderItem);
+	}
+	const preservedPlaceholders = takeRecentReflectionItemsWithinTokenBudget(
+		placeholderItems,
+		args.placeholderTokenBudget ?? 0,
+	);
 	args.state.generationCount += 1;
 	args.state.lastReflectionRefreshTimestamp = args.createdAt || nowIso();
 	args.state.reflections = [
+		...preservedPlaceholders,
 		createReflectionItem(text, {
-			id: nextId("R", []),
+			id: nextId("R", idLedger),
 			generation: Math.max(1, args.state.generationCount),
 			refreshedFromReflectionIds: previousIds,
-			archivedToMemoryMdHash: args.archivedHash,
 			createdAt: args.createdAt,
 		}),
 	];

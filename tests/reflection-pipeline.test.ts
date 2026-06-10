@@ -98,7 +98,7 @@ describe("reflection pipeline", () => {
 		expect(state.reflections[0]!.text).toContain("condensed observation");
 	});
 
-	test("executes a reflection refresh pass and carries archive metadata", async () => {
+	test("executes a reflection refresh pass and keeps a prompt-visible archive placeholder", async () => {
 		const state = createInitialOmState();
 		appendReflectionFromObservations({ state, reflectionText: "reflection one", consumedObservationIds: [] });
 		state.totalReflectionTokens = 300;
@@ -115,7 +115,15 @@ describe("reflection pipeline", () => {
 		});
 		expect(plan).not.toBeNull();
 		const applied = await executeReflectionPlan({
-			config: { ...DEFAULT_CONFIG, reflections: { ...DEFAULT_CONFIG.reflections, archiveOldToMemoryMd: true } },
+			config: {
+				...DEFAULT_CONFIG,
+				reflections: {
+					...DEFAULT_CONFIG.reflections,
+					archiveOldToMemoryMd: true,
+					archiveThresholdPercent: 10,
+					archivePlaceholderTokenBudget: 256,
+				},
+			},
 			state,
 			plan: { ...plan!, mode: "reflections" },
 			getAuth: async () => ({}) as any,
@@ -133,8 +141,10 @@ describe("reflection pipeline", () => {
 			},
 		});
 		expect(applied).toBe(true);
-		expect(state.reflections).toHaveLength(1);
-		expect(state.reflections[0]!.text).toContain("refreshed reflection");
+		expect(state.reflections).toHaveLength(2);
+		expect(state.reflections[0]!.placeholder).toBe(true);
+		expect(state.reflections[0]!.text).toContain("OM_REFLECTION_ARCHIVE");
 		expect(state.reflections[0]!.archivedToMemoryMdHash).toBe("hash-123");
+		expect(state.reflections[1]!.text).toContain("refreshed reflection");
 	});
 });

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getGlobalConfigPath, loadConfig } from "../config";
+import { ensureProjectConfigFile, getGlobalConfigPath, getProjectConfigPath, loadConfig } from "../config";
 import { DEFAULT_CONFIG } from "../types";
 
 let tempDir = "";
@@ -40,6 +40,7 @@ describe("OM config loading", () => {
 				oversizedEntries: { entryBytes: 4321 },
 				experienceBank: { maxInjectedExperiences: 5 },
 				footerUsagePollIntervalMs: 420000,
+				reflections: { archiveThresholdPercent: 18, archivePlaceholderTokenBudget: 144 },
 			}),
 		);
 
@@ -50,6 +51,8 @@ describe("OM config loading", () => {
 		expect(config.oversizedEntries.entryBytes).toBe(4321);
 		expect(config.experienceBank.maxInjectedExperiences).toBe(5);
 		expect(config.footerUsagePollIntervalMs).toBe(420000);
+		expect(config.reflections.archiveThresholdPercent).toBe(18);
+		expect(config.reflections.archivePlaceholderTokenBudget).toBe(144);
 	});
 
 	test("legacy codex poll field maps to footer usage poll interval", () => {
@@ -67,7 +70,27 @@ describe("OM config loading", () => {
 		const config = loadConfig(tempDir);
 		expect(config.footerUsagePollIntervalMs).toBe(300000);
 		expect(config.compressionStrategy).toBe("reobserve");
-		expect(config.cacheOptimization.maxPromptContextPercent).toBe(50);
+		expect(config.cacheOptimization.maxPromptContextPercent).toBe(60);
+		expect(config.reflections.archiveThresholdPercent).toBe(10);
+		expect(config.reflections.archivePlaceholderTokenBudget).toBe(256);
+	});
+
+	test("creates a project config file from current defaults when missing", () => {
+		const projectConfigPath = getProjectConfigPath(tempDir);
+		const result = ensureProjectConfigFile(tempDir);
+		expect(result.created).toBe(true);
+		expect(result.path).toBe(projectConfigPath);
+		expect(fs.existsSync(projectConfigPath)).toBe(true);
+		expect(JSON.parse(fs.readFileSync(projectConfigPath, "utf8"))).toEqual(DEFAULT_CONFIG);
+	});
+
+	test("does not overwrite an existing project config file", () => {
+		const projectConfigPath = getProjectConfigPath(tempDir);
+		fs.mkdirSync(path.dirname(projectConfigPath), { recursive: true });
+		fs.writeFileSync(projectConfigPath, JSON.stringify({ enabled: false, rawMessages: { observeThresholdPercent: 42 } }, null, 2));
+		const result = ensureProjectConfigFile(tempDir);
+		expect(result.created).toBe(false);
+		expect(JSON.parse(fs.readFileSync(projectConfigPath, "utf8"))).toEqual({ enabled: false, rawMessages: { observeThresholdPercent: 42 } });
 	});
 
 	test("supports low observation trigger/target thresholds for <50% guardrails", () => {
@@ -107,7 +130,7 @@ describe("OM config loading", () => {
 		expect(config.cacheOptimization.minCheckpointMs).toBe(90000);
 	});
 
-	test("legacy reflection keys are ignored", () => {
+	test("legacy reflection observation key maps to the effective reflection trigger", () => {
 		fs.writeFileSync(
 			globalConfigPath,
 			JSON.stringify({
@@ -116,7 +139,7 @@ describe("OM config loading", () => {
 			}),
 		);
 		const config = loadConfig(tempDir);
-		expect(config.reflectionTriggerContextPercent).toBe(DEFAULT_CONFIG.reflectionTriggerContextPercent);
+		expect(config.reflectionTriggerContextPercent).toBe(41);
 		expect(config.reflectionTargetContextPercent).toBe(DEFAULT_CONFIG.reflectionTargetContextPercent);
 	});
 
