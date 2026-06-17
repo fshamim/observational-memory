@@ -130,19 +130,19 @@ export const DEFAULT_CONFIG: ObservationalMemoryConfig = {
 	// Public/legacy top-level mirror of the observation trigger. This is the
 	// context-usage percent where OM starts trying to observe older raw messages.
 	// Example at 272k: 45% = 122,400 tokens.
-	observationTriggerContextPercent: 48,
+	observationTriggerContextPercent: 50,
 
 	// Public/legacy top-level mirror of the observation target. After OM starts
 	// observing, it tries to get effective context usage back down toward this
 	// target instead of hovering right at the trigger.
 	// Example at 272k: 25% = 68,000 tokens.
-	observationTargetContextPercent: 25,
+	observationTargetContextPercent: 30,
 
 	// Legacy top-level scope hint for how much of the oldest still-unobserved raw
 	// history may be considered in one observation planning pass.
 	// Example at 272k: 65% = 176,800 tokens of the oldest raw backlog can be in
 	// scope before other guards trim further.
-	observationScopePercent: 50,
+	observationScopePercent: 5,
 
 	// Always protect this many newest raw messages from being swept into the next
 	// observation batch so the active conversation tail stays intact.
@@ -157,7 +157,7 @@ export const DEFAULT_CONFIG: ObservationalMemoryConfig = {
 	// Example at 272k: 10% = 27,200 tokens.
 	// Note: with the current nested defaults below, the effective reobserve
 	// trigger is driven by `observations.reobserveThresholdPercent` (15%).
-	reflectionTriggerContextPercent: 10,
+	reflectionTriggerContextPercent: 12,
 
 	// Once reflection/compaction starts, OM tries to reduce observation pressure
 	// toward this target rather than stopping exactly at the trigger.
@@ -241,19 +241,19 @@ export const DEFAULT_CONFIG: ObservationalMemoryConfig = {
 		enabled: true,
 
 		// Start warning when the session file reaches about 150 MiB.
-		warnBytes: 150 * 1024 * 1024,
+		warnBytes: 10 * 1024 * 1024,
 
 		// Preferred rollover target point: about 200 MiB.
-		targetBytes: 200 * 1024 * 1024,
+		targetBytes: 20 * 1024 * 1024,
 
 		// Stronger guardrail: beyond about 250 MiB, rollover becomes urgent.
-		hardBytes: 250 * 1024 * 1024,
+		hardBytes: 30 * 1024 * 1024,
 
 		// Legacy recovery threshold for especially bloated historical sessions.
-		legacyRecoveryCandidateBytes: 300 * 1024 * 1024,
+		legacyRecoveryCandidateBytes: 40 * 1024 * 1024,
 
 		// Only bother rolling over if OM estimates it can save at least ~50 MiB.
-		minProjectedSavingsBytes: 50 * 1024 * 1024,
+		minProjectedSavingsBytes: 3 * 1024 * 1024,
 	},
 
 	oversizedEntries: {
@@ -299,12 +299,12 @@ export const DEFAULT_CONFIG: ObservationalMemoryConfig = {
 		// At a 272k window: 45% = 122,400 tokens.
 		// Because cacheOptimization caps usable prompt share at 60%, this 49%
 		// remains valid; if you set this above 59%, the cap would clamp it.
-		observeThresholdPercent: 49,
+		observeThresholdPercent: 50,
 
 		// Observation planner starts from roughly the oldest 25% slice of the raw
 		// backlog when choosing what to observe next.
 		// At a 272k window: 25% = 68,000 tokens worth of oldest raw history.
-		oldestScopePercent: 25,
+		oldestScopePercent: 5,
 	},
 
 	observations: {
@@ -312,12 +312,12 @@ export const DEFAULT_CONFIG: ObservationalMemoryConfig = {
 		// tokens reach this threshold, OM becomes eligible to compact them into a
 		// smaller representation (subject to checkpoint cadence gates).
 		// At a 272k window: 15% = 40,800 tokens.
-		reobserveThresholdPercent: 15,
+		reobserveThresholdPercent: 12,
 
 		// During reobserve compaction, focus first on the oldest 25% slice of the
 		// observation backlog.
 		// At a 272k window: 25% = 68,000 tokens worth of oldest observations.
-		oldestScopePercent: 25,
+		oldestScopePercent: 6,
 	},
 
 	reflections: {
@@ -511,6 +511,7 @@ export interface PendingSessionSwitchRecord {
 	coveredEntryIds: string[];
 	trimmedEntryIds: string[];
 	archiveChunks: ArchiveChunkManifest[];
+	nextState?: ObservationState;
 	cleanupOriginalSessionPath?: string;
 }
 

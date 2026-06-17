@@ -9,12 +9,12 @@
     "modelId": "gpt-5.4-mini"
   },
   "compressionStrategy": "reobserve",
-  "observationTriggerContextPercent": 48,
-  "observationTargetContextPercent": 25,
-  "observationScopePercent": 50,
+  "observationTriggerContextPercent": 50,
+  "observationTargetContextPercent": 30,
+  "observationScopePercent": 5,
   "preserveRecentMessages": 12,
   "minObservationMessages": 10,
-  "reflectionTriggerContextPercent": 10,
+  "reflectionTriggerContextPercent": 12,
   "reflectionTargetContextPercent": 5,
   "contextWindowSize": 250000,
   "maxReflectionRetries": 3,
@@ -39,11 +39,11 @@
   },
   "sessionRollover": {
     "enabled": true,
-    "warnBytes": 157286400,
-    "targetBytes": 209715200,
-    "hardBytes": 262144000,
-    "legacyRecoveryCandidateBytes": 314572800,
-    "minProjectedSavingsBytes": 52428800
+    "warnBytes": 10485760,
+    "targetBytes": 20971520,
+    "hardBytes": 31457280,
+    "legacyRecoveryCandidateBytes": 41943040,
+    "minProjectedSavingsBytes": 3145728
   },
   "oversizedEntries": {
     "entryBytes": 8388608,
@@ -62,12 +62,12 @@
     "maxTextChars": 240
   },
   "rawMessages": {
-    "observeThresholdPercent": 49,
-    "oldestScopePercent": 25
+    "observeThresholdPercent": 50,
+    "oldestScopePercent": 5
   },
   "observations": {
-    "reobserveThresholdPercent": 15,
-    "oldestScopePercent": 25
+    "reobserveThresholdPercent": 12,
+    "oldestScopePercent": 6
   },
   "reflections": {
     "reobserveThresholdPercent": 10,

@@ -71,6 +71,10 @@ export function getRecoveryReportPath(sessionKey: string, cwd = process.cwd()): 
 	return path.join(getRecoveryReportsDir(cwd), `${sanitizeSessionKey(sessionKey)}.json`);
 }
 
+export function getDiagnosticLogPath(cwd = process.cwd()): string {
+	return path.join(getProjectOmDir(cwd), "diagnostics.jsonl");
+}
+
 export function writeJsonFileAtomic(filePath: string, value: unknown): void {
 	ensureDir(path.dirname(filePath));
 	const tempPath = `${filePath}.tmp`;

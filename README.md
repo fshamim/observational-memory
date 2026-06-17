@@ -48,12 +48,12 @@ Minimal project-local override:
 {
   "contextWindowSize": 272000,
   "rawMessages": {
-    "observeThresholdPercent": 45,
-    "oldestScopePercent": 25
+    "observeThresholdPercent": 50,
+    "oldestScopePercent": 5
   },
   "observations": {
     "reobserveThresholdPercent": 12,
-    "oldestScopePercent": 25
+    "oldestScopePercent": 6
   },
   "reflections": {
     "reobserveThresholdPercent": 10,
@@ -151,20 +151,20 @@ All defaults below come from `extensions/observational-memory/types.ts`.
 - `reflector` uses the dedicated reflector pipeline/model
 
 #### `observationTriggerContextPercent`
-- default: `48`
+- default: `50`
 - type: number
 - legacy compatibility mirror for when observation should start
 - new configs should prefer `rawMessages.observeThresholdPercent`
 
 #### `observationTargetContextPercent`
-- default: `25`
+- default: `30`
 - type: number
 - OM tries to reduce observation pressure toward this target once observation starts
 - runtime normalization keeps this below the effective observation trigger
 - clamp range: `1..94`, then normalized to at least `5` and below trigger
 
 #### `observationScopePercent`
-- default: `50`
+- default: `5`
 - type: number
 - legacy compatibility mirror for how much oldest raw backlog may be considered in a planning pass
 - new configs should prefer `rawMessages.oldestScopePercent`
@@ -182,7 +182,7 @@ All defaults below come from `extensions/observational-memory/types.ts`.
 - clamp range: `1..200`
 
 #### `reflectionTriggerContextPercent`
-- default: `10`
+- default: `12`
 - type: number
 - legacy compatibility mirror for reflection/reobserve trigger pressure
 - new configs should prefer `observations.reobserveThresholdPercent`
@@ -318,33 +318,33 @@ All defaults below come from `extensions/observational-memory/types.ts`.
 - enables OM logic that warns about or prepares rollover for very large session files
 
 #### `sessionRollover.warnBytes`
-- default: `157286400` (~150 MiB)
+- default: `10485760` (~10 MiB)
 - type: number
 - warning threshold for growing session files
 - clamp range: `8388608..Number.MAX_SAFE_INTEGER`
 
 #### `sessionRollover.targetBytes`
-- default: `209715200` (~200 MiB)
+- default: `20971520` (~20 MiB)
 - type: number
 - preferred rollover target point
 - clamp range: `16777216..Number.MAX_SAFE_INTEGER`
 - normalized so final value is always at least `warnBytes`
 
 #### `sessionRollover.hardBytes`
-- default: `262144000` (~250 MiB)
+- default: `31457280` (~30 MiB)
 - type: number
 - harder rollover guardrail
 - clamp range: `25165824..Number.MAX_SAFE_INTEGER`
 - normalized so final value is always at least `targetBytes`
 
 #### `sessionRollover.legacyRecoveryCandidateBytes`
-- default: `314572800` (~300 MiB)
+- default: `41943040` (~40 MiB)
 - type: number
 - threshold for old very-large sessions that may need recovery treatment
 - clamp range: `33554432..Number.MAX_SAFE_INTEGER`
 
 #### `sessionRollover.minProjectedSavingsBytes`
-- default: `52428800` (~50 MiB)
+- default: `3145728` (~3 MiB)
 - type: number
 - OM only bothers rolling over when estimated savings meet or exceed this amount
 - clamp range: `1048576..Number.MAX_SAFE_INTEGER`
@@ -418,13 +418,13 @@ All defaults below come from `extensions/observational-memory/types.ts`.
 These are the most important current knobs for observation scheduling.
 
 #### `rawMessages.observeThresholdPercent`
-- default: `49`
+- default: `50`
 - type: number
 - effective runtime threshold where OM begins observing older raw messages
 - clamp range: `1..95`
 
 #### `rawMessages.oldestScopePercent`
-- default: `25`
+- default: `5`
 - type: number
 - how much of the oldest raw backlog the planner considers first when selecting observation work
 - clamp range: `1..100`
@@ -434,13 +434,13 @@ These are the most important current knobs for observation scheduling.
 These are the most important current knobs for compaction in `reobserve` mode.
 
 #### `observations.reobserveThresholdPercent`
-- default: `15`
+- default: `12`
 - type: number
 - when accumulated observation tokens reach this pressure, OM becomes eligible to compact them into a smaller representation
 - clamp range: `1..95`
 
 #### `observations.oldestScopePercent`
-- default: `25`
+- default: `6`
 - type: number
 - how much of the oldest observation backlog is considered first during reobserve compaction
 - clamp range: `1..100`

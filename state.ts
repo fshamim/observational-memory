@@ -9,6 +9,7 @@ import type {
 } from "./types";
 import { CUSTOM_ENTRY_TYPE } from "./types";
 import { createInitialOmState, normalizeOmState, serializeOmState } from "./memory-queues";
+import { getProjectOmDir } from "./lib/om-paths";
 
 export const OBSERVATION_STATE_SCHEMA_VERSION = 2;
 
@@ -66,10 +67,14 @@ export function loadStateFromSessionEntries(entries: any[]): ObservationState | 
 	return null;
 }
 
-export function getStatePath(cwd?: string): string {
+export function getLegacyStatePath(cwd?: string): string {
 	const dir = cwd || process.cwd();
 	const safePath = `--${dir.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
 	return path.join(os.homedir(), ".pi", "agent", "extensions", "observational-memory", safePath, "state.json");
+}
+
+export function getStatePath(cwd?: string): string {
+	return path.join(getProjectOmDir(cwd || process.cwd()), "state.json");
 }
 
 export function loadStateFromFile(filePath: string): ObservationState | null {
@@ -79,7 +84,19 @@ export function loadStateFromFile(filePath: string): ObservationState | null {
 			return normalizeState(raw);
 		}
 	} catch {
-		// ignore malformed backup state
+		
+	}
+	return null;
+}
+
+export function loadPersistedState(options?: { cwd?: string; entries?: any[] }): ObservationState | null {
+	const cwd = options?.cwd || process.cwd();
+	const primary = loadStateFromFile(getStatePath(cwd));
+	if (primary) return primary;
+	const legacy = loadStateFromFile(getLegacyStatePath(cwd));
+	if (legacy) return legacy;
+	if (options?.entries?.length) {
+		return loadStateFromSessionEntries(options.entries);
 	}
 	return null;
 }
@@ -94,7 +111,7 @@ export function saveStateToFile(filePath: string, state: ObservationState): void
 		fs.writeFileSync(tmpPath, JSON.stringify(serializeOmState(state), null, 2), "utf-8");
 		fs.renameSync(tmpPath, filePath);
 	} catch {
-		// best-effort backup only
+		
 	}
 }
 

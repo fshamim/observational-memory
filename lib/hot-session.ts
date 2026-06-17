@@ -7,8 +7,7 @@ import type {
 	SessionRolloverEntry,
 	ObservationalMemoryConfig,
 } from "../types";
-import { CUSTOM_ENTRY_TYPE, ROLLOVER_ENTRY_TYPE } from "../types";
-import { createStateEntry } from "../state";
+import { ROLLOVER_ENTRY_TYPE } from "../types";
 import { getRawArchiveDir } from "./om-paths";
 import { writeArchiveChunks } from "./raw-archive";
 import {
@@ -192,13 +191,6 @@ export function buildHotSessionBundle(options: BuildHotSessionOptions): BuildHot
 		rawMessageCursor: 0,
 		lastObservedMessageIndex: 0,
 	};
-	const stateEntry = {
-		type: "custom",
-		id: `om-state-${Date.now()}`,
-		timestamp: nowIso(),
-		customType: CUSTOM_ENTRY_TYPE,
-		data: createStateEntry("observation", rebasedState),
-	};
 	const rolloverEntry: SessionRolloverEntry = {
 		version: 1,
 		token,
@@ -230,7 +222,7 @@ export function buildHotSessionBundle(options: BuildHotSessionOptions): BuildHot
 	}
 
 	let parentId: string | null = String(header.id);
-	for (const entry of [...metadataEntries, stateEntry, rolloverCustomEntry, ...rebuiltMessages]) {
+	for (const entry of [...metadataEntries, rolloverCustomEntry, ...rebuiltMessages]) {
 		const next = makeLinearChild(entry, parentId);
 		outEntries.push(next);
 		parentId = String(next.id || parentId || "");
@@ -249,6 +241,7 @@ export function buildHotSessionBundle(options: BuildHotSessionOptions): BuildHot
 		coveredEntryIds,
 		trimmedEntryIds,
 		archiveChunks: archiveResult.chunks,
+		nextState: rebasedState,
 		cleanupOriginalSessionPath: sourceSessionPath,
 	};
 
