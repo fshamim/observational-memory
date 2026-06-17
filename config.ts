@@ -28,27 +28,52 @@ export function stringifyDefaultConfig(): string {
 	return `${JSON.stringify(DEFAULT_CONFIG, null, 2)}\n`;
 }
 
+const PROJECT_CONFIG_BOOTSTRAP_MIGRATION = "2026-06-snappy-rollover-v1";
+
+export function getProjectConfigBootstrapMarkerPath(cwd = process.cwd()): string {
+	return path.join(cwd, ".pi", `.observational-memory-bootstrap-${PROJECT_CONFIG_BOOTSTRAP_MIGRATION}`);
+}
+
+export function getProjectConfigBootstrapBackupPath(cwd = process.cwd()): string {
+	return path.join(cwd, ".pi", `observational-memory.pre-${PROJECT_CONFIG_BOOTSTRAP_MIGRATION}.json`);
+}
+
 export function ensureProjectConfigFile(cwd = process.cwd()): {
 	path: string;
 	created: boolean;
+	updated: boolean;
+	backupPath?: string;
 	error?: string;
 } {
 	const filePath = getProjectConfigPath(cwd);
+	const markerPath = getProjectConfigBootstrapMarkerPath(cwd);
+	const backupPath = getProjectConfigBootstrapBackupPath(cwd);
 	try {
-		if (fs.existsSync(filePath)) {
-			return { path: filePath, created: false };
-		}
 		fs.mkdirSync(path.dirname(filePath), { recursive: true });
-		fs.writeFileSync(filePath, stringifyDefaultConfig(), { flag: "wx" });
-		return { path: filePath, created: true };
+		if (!fs.existsSync(filePath)) {
+			fs.writeFileSync(filePath, stringifyDefaultConfig(), { flag: "wx" });
+			fs.writeFileSync(markerPath, `${PROJECT_CONFIG_BOOTSTRAP_MIGRATION}\n`, { flag: "w" });
+			return { path: filePath, created: true, updated: false };
+		}
+		if (!fs.existsSync(markerPath)) {
+			if (!fs.existsSync(backupPath)) {
+				fs.copyFileSync(filePath, backupPath);
+			}
+			fs.writeFileSync(filePath, stringifyDefaultConfig(), { flag: "w" });
+			fs.writeFileSync(markerPath, `${PROJECT_CONFIG_BOOTSTRAP_MIGRATION}\n`, { flag: "w" });
+			return { path: filePath, created: false, updated: true, backupPath };
+		}
+		return { path: filePath, created: false, updated: false };
 	} catch (error) {
 		const code = typeof error === "object" && error && "code" in error ? String((error as any).code || "") : "";
 		if (code === "EEXIST") {
-			return { path: filePath, created: false };
+			return { path: filePath, created: false, updated: false };
 		}
 		return {
 			path: filePath,
 			created: false,
+			updated: false,
+			backupPath: fs.existsSync(backupPath) ? backupPath : undefined,
 			error: error instanceof Error ? error.message : String(error),
 		};
 	}

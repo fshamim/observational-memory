@@ -5,17 +5,15 @@ import type {
 	ObservationStateEntry,
 	ObservationDiagnosticEntry,
 } from "./types";
-import { CUSTOM_ENTRY_TYPE, DIAGNOSTIC_ENTRY_TYPE, ROLLOVER_ENTRY_TYPE } from "./types";
+import { ROLLOVER_ENTRY_TYPE } from "./types";
 import { ensureProjectConfigFile, loadConfig } from "./config";
 import { estimateStringTokens, estimateMessagesTokens } from "./token-estimator";
 import { requireModelAuth, type RequestAuth, type CompatibleModelRegistry } from "./auth";
 import {
 	createInitialState,
-	loadStateFromSessionEntries,
-	loadStateFromFile,
+	loadPersistedState,
 	saveStateToFile,
 	getStatePath,
-	createStateEntry,
 	createDiagnosticEntry,
 } from "./state";
 import {
@@ -23,6 +21,7 @@ import {
 	getPendingSwitchDir,
 	getRawArchiveDir,
 	getRecoveryReportPath,
+	getDiagnosticLogPath,
 	sanitizeSessionKey,
 	writeJsonFileAtomic,
 } from "./lib/om-paths";
@@ -33,7 +32,13 @@ import {
 	estimateArchiveableSavingsBytes,
 	extractBranchMessageEntries,
 } from "./lib/hot-session";
-import { createPendingSwitchToken, deletePendingSwitch, loadPendingSwitch, savePendingSwitch } from "./lib/pending-switch";
+import {
+	createPendingSwitchToken,
+	deletePendingSwitch,
+	findPendingSwitchBySourceSessionPath,
+	loadPendingSwitch,
+	savePendingSwitch,
+} from "./lib/pending-switch";
 import { evaluateRolloverDecision } from "./lib/rollover-policy";
 import {
 	listExperienceRecords,
@@ -961,7 +966,12 @@ async function probeCodexQuotaViaBackendUsageApi(
 }
 
 export default function observationalMemoryExtension(pi: ExtensionAPI): void {
-	ensureProjectConfigFile();
+	const initialBootstrapResult = ensureProjectConfigFile();
+	let pendingBootstrapNotice = initialBootstrapResult.updated
+		? `Observational memory config was updated once to the new safe defaults.${initialBootstrapResult.backupPath ? ` Backup: ${initialBootstrapResult.backupPath}` : ""}`
+		: initialBootstrapResult.error
+			? `Observational memory config bootstrap failed: ${truncateInline(initialBootstrapResult.error, 160)}`
+			: "";
 	let config = loadConfig();
 	if (!config.enabled) return;
 
@@ -1043,7 +1053,15 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 	function ensureProjectConfigBootstrap(cwd?: string): void {
 		const result = ensureProjectConfigFile(cwd || process.cwd());
 		if (result.error) {
-			notifyOm(`Observational memory config bootstrap failed: ${truncateInline(result.error, 160)}`, "warning");
+			pendingBootstrapNotice = `Observational memory config bootstrap failed: ${truncateInline(result.error, 160)}`;
+		}
+		if (result.updated) {
+			const backupDetail = result.backupPath ? ` Backup: ${result.backupPath}` : "";
+			pendingBootstrapNotice = `Observational memory config was updated once to the new safe defaults.${backupDetail}`;
+		}
+		if (pendingBootstrapNotice) {
+			notifyOm(pendingBootstrapNotice, "warning", true);
+			pendingBootstrapNotice = "";
 		}
 	}
 
@@ -1220,6 +1238,12 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 				return String(entry.data.token);
 			}
 		}
+		const currentSessionFile = String(ctx?.sessionManager?.getSessionFile?.() || "");
+		const discovered = findPendingSwitchBySourceSessionPath(currentSessionFile, process.cwd());
+		if (discovered?.token) {
+			pendingSessionSwitchToken = String(discovered.token);
+			return pendingSessionSwitchToken;
+		}
 		return null;
 	}
 
@@ -1229,6 +1253,21 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 		const pending = loadPendingSwitch(token, process.cwd());
 		if (!pending) return null;
 		return { token, pending };
+	}
+
+	function showPendingSwitchHint(ctx: any, pending: { token: string; pending: any }, source: string): void {
+		pendingSessionSwitchToken = pending.token;
+		setTransientActivityStatus(styleStatus("warning", "⟳ OM switch ready · /om switch"));
+		appendDiagnostic("info", "rollover", "Pending OM hot-session switch is ready", {
+			source,
+			token: pending.token,
+			targetSessionPath: pending.pending?.targetSessionPath,
+		});
+		notifyOm(
+			`OM prepared a compact hot session for this session. Run /om switch to continue in ${path.basename(String(pending.pending?.targetSessionPath || "the hot session"))}.`,
+			"warning",
+			true,
+		);
 	}
 
 	async function runPendingSessionSwitch(ctx: any, explicitToken?: string): Promise<boolean> {
@@ -1247,11 +1286,31 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 			return false;
 		}
 		setTransientActivityStatus(styleStatus("warning", "⟳ OM switching session"));
+		const previousState = state;
+		const hasNextState = Boolean(pending?.nextState && typeof pending.nextState === "object");
 		try {
 			await ctx.waitForIdle();
-			await ctx.switchSession(pending.targetSessionPath);
+			if (hasNextState) {
+				saveStateToFile(getStatePath(), pending.nextState as ObservationState);
+			}
+			const result = await ctx.switchSession(pending.targetSessionPath);
+			if (result?.cancelled) {
+				if (hasNextState) {
+					saveStateToFile(getStatePath(), previousState);
+				}
+				appendDiagnostic("warning", "rollover", "OM session switch was cancelled", {
+					token,
+					targetSessionPath: pending.targetSessionPath,
+				});
+				clearTransientActivityStatus();
+				await ctx.ui.notify("OM session switch was cancelled.", "warning");
+				return false;
+			}
 			return true;
 		} catch (error) {
+			if (hasNextState) {
+				saveStateToFile(getStatePath(), previousState);
+			}
 			setOmError(describeAsyncError(error), "rollover", { notify: true });
 			appendDiagnostic("error", "rollover", "OM session switch command failed", {
 				token,
@@ -1302,6 +1361,19 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 		}
 	}
 
+	function refreshSessionFileMetrics(ctx: any): void {
+		const sessionFilePath = String(ctx?.sessionManager?.getSessionFile?.() || "");
+		if (!sessionFilePath || !fs.existsSync(sessionFilePath)) {
+			lastSessionFileSizeBytes = 0;
+			return;
+		}
+		try {
+			lastSessionFileSizeBytes = fs.statSync(sessionFilePath).size;
+		} catch {
+			lastSessionFileSizeBytes = 0;
+		}
+	}
+
 	async function maybeStageSessionRollover(ctx: any, reason: string, force = false): Promise<void> {
 		rememberContext(ctx);
 		if (!config.sessionRollover.enabled || shuttingDown || sessionRolloverInFlight || pendingSessionSwitchToken) {
@@ -1310,13 +1382,9 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 		const sessionFilePath = String(ctx?.sessionManager?.getSessionFile?.() || "");
 		if (!sessionFilePath || !fs.existsSync(sessionFilePath)) return;
 
-		let currentBytes = 0;
-		try {
-			currentBytes = fs.statSync(sessionFilePath).size;
-		} catch {
-			return;
-		}
-		lastSessionFileSizeBytes = currentBytes;
+		refreshSessionFileMetrics(ctx);
+		const currentBytes = lastSessionFileSizeBytes;
+		if (currentBytes <= 0) return;
 
 		const branchEntries = lastBranchEntries.length > 0 ? lastBranchEntries : ctx?.sessionManager?.getBranch?.() || [];
 		const branchMessageEntries = extractBranchMessageEntries(branchEntries);
@@ -1417,6 +1485,17 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 				clearTransientActivityStatus();
 			}
 		}
+	}
+
+	async function handleStartupSessionRollover(ctx: any): Promise<void> {
+		refreshSessionFileMetrics(ctx);
+		finalizePendingSessionArchive(ctx);
+		const existingPending = resolvePendingSwitchRecord(ctx);
+		if (existingPending) {
+			showPendingSwitchHint(ctx, existingPending, "session_start");
+			return;
+		}
+		await maybeStageSessionRollover(ctx, "session_start", false);
 	}
 
 	function resetFooterRenderScheduler(resetKey = false): void {
@@ -2145,10 +2224,14 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 		details?: Record<string, unknown>,
 	): void {
 		try {
-			pi.appendEntry(
-				DIAGNOSTIC_ENTRY_TYPE,
-				createDiagnosticEntry(level, phase, message, details),
-			);
+			const entry = createDiagnosticEntry(level, phase, message, details);
+			const cwd = currentCtx?.cwd || process.cwd();
+			const payload = {
+				...entry,
+				sessionLabel: footerState.sessionLabel || resolveSessionLabel(currentCtx) || "",
+				sessionFile: String(currentCtx?.sessionManager?.getSessionFile?.() || ""),
+			};
+			fs.appendFileSync(getDiagnosticLogPath(cwd), `${JSON.stringify(payload)}\n`, "utf-8");
 		} catch {
 			// best-effort only
 		}
@@ -2708,17 +2791,9 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 		clearOmError();
 
 		const entries = ctx.sessionManager.getEntries();
-		const loaded = loadStateFromSessionEntries(entries);
+		const loaded = loadPersistedState({ cwd: process.cwd(), entries });
 		if (loaded) {
 			state = loaded;
-		} else {
-			const hasMessages = entries.some((e: any) => e.type === "message");
-			if (hasMessages) {
-				const fileState = loadStateFromFile(getStatePath());
-				if (fileState) {
-					state = fileState;
-				}
-			}
 		}
 		state.rawMessageCursor = getObservationCursor(state);
 		computeQueueTokenTotals(state);
@@ -2748,12 +2823,12 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 			}
 		}
 
+		refreshSessionFileMetrics(ctx);
 		getProjectOmDir(process.cwd());
 		getPendingSwitchDir(process.cwd());
 		syncRuntimeUiState(ctx);
 		refreshContextPressureSnapshot(ctx);
 		syncSystemPromptTokenEstimate(ctx);
-		finalizePendingSessionArchive(ctx);
 
 		ctx.ui.setFooter((tui: any, theme: any, footerData: any) => {
 			footerDataProviderRef = footerData;
@@ -2798,6 +2873,7 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 		syncRuntimeUiState(ctx);
 		updateOmUi();
 		startFooterUsagePolling();
+		await handleStartupSessionRollover(ctx);
 	});
 
 	// ─── HOOK: before_agent_start — Inject observations into system prompt ────
@@ -2829,22 +2905,8 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 		});
 		syncReflectionArmedState(thresholds);
 
-		let preflightObservationScheduled = false;
-		let preflightObservationCompleted = false;
-		if (forceObservationOnNextTurn) {
-			const preflightObservation = scheduleObservation(true);
-			if (preflightObservation) {
-				preflightObservationScheduled = true;
-				preflightObservationCompleted = await preflightObservation;
-				({ cursorIndex } = refreshPendingContextSlice(messages));
-				refreshContextPressureSnapshot(ctx);
-				forceObservationOnNextTurn = shouldArmObservation({
-					currentArmed: forceObservationOnNextTurn,
-					effectiveContextPercent: lastContextPercent,
-					thresholds,
-				});
-			}
-		}
+		const preflightObservationScheduled = false;
+		const preflightObservationCompleted = false;
 
 		syncReflectionArmedState();
 
@@ -2911,6 +2973,7 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 	pi.on("agent_end", (_event: any, ctx: any) => {
 		rememberContext(ctx);
 		syncRuntimeUiState(ctx);
+		refreshSessionFileMetrics(ctx);
 		refreshCodexQuotaFooterState(true);
 		void (async () => {
 			const diff = await readGitDiffShortstatAsync(3000);
@@ -2976,6 +3039,7 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 	pi.on("turn_end", (_event: any, ctx: any) => {
 		rememberContext(ctx);
 		syncRuntimeUiState(ctx);
+		refreshSessionFileMetrics(ctx);
 		completedTurnCount += 1;
 		kickObservation("turn_end");
 		kickReflection("turn_end");
@@ -3220,7 +3284,8 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 		handler: async (args: any, ctx: any) => {
 			rememberContext(ctx);
 			const commandArgs = String(args || "").trim();
-			const sub = commandArgs.split(/\s+/)[0] || "status";
+			const [sub = "status", ...restArgs] = commandArgs ? commandArgs.split(/\s+/) : ["status"];
+			const switchTokenArg = restArgs[0] || "";
 
 			if (sub === "status") {
 				const pendingSwitch = resolvePendingSwitchRecord(ctx);
@@ -3291,6 +3356,8 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 						`  Observe trigger: ${thresholds.observationTriggerPercent}% (~${thresholds.observationTriggerTokens} tokens)`,
 						`  Observe target: ${thresholds.observationTargetPercent}% (~${thresholds.observationTargetTokens} tokens)`,
 						`  Hot session bytes: ${lastSessionFileSizeBytes || 0}`,
+						`  OM state file: ${getStatePath()}`,
+						`  OM diagnostic log: ${getDiagnosticLogPath(process.cwd())}`,
 						`  Projected hot bytes after rollover: ${lastProjectedHotSessionBytes || 0}`,
 						`  Last rollover reason: ${lastRolloverReason || "none"}`,
 						`  Pending session switch token: ${pendingSessionSwitchToken || pendingSwitch?.token || "none"}`,
@@ -3444,7 +3511,7 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 				appendDiagnostic("info", "manual_reset", "Observational memory reset by user");
 				await ctx.ui.notify("Observational memory reset.", "info");
 			} else if (sub === "switch") {
-				await runPendingSessionSwitch(ctx);
+				await runPendingSessionSwitch(ctx, switchTokenArg);
 			} else if (sub === "compact") {
 				if (!hasObservationItems(state) && !hasReflectionItems(state)) {
 					await ctx.ui.notify("Nothing to compact — no observations or reflections.");
@@ -3580,12 +3647,10 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 // =============================================================================
 
 function persistState(
-	pi: ExtensionAPI,
+	_pi: ExtensionAPI,
 	state: ObservationState,
-	eventType: ObservationStateEntry["eventType"],
+	_eventType: ObservationStateEntry["eventType"],
 ): void {
 	computeQueueTokenTotals(state);
-	const entry = createStateEntry(eventType, state);
-	pi.appendEntry(CUSTOM_ENTRY_TYPE, entry);
 	saveStateToFile(getStatePath(), state);
 }

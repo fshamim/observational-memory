@@ -2,7 +2,14 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { ensureProjectConfigFile, getGlobalConfigPath, getProjectConfigPath, loadConfig } from "../config";
+import {
+	ensureProjectConfigFile,
+	getGlobalConfigPath,
+	getProjectConfigBootstrapBackupPath,
+	getProjectConfigBootstrapMarkerPath,
+	getProjectConfigPath,
+	loadConfig,
+} from "../config";
 import { DEFAULT_CONFIG } from "../types";
 
 let tempDir = "";
@@ -73,24 +80,54 @@ describe("OM config loading", () => {
 		expect(config.cacheOptimization.maxPromptContextPercent).toBe(60);
 		expect(config.reflections.archiveThresholdPercent).toBe(10);
 		expect(config.reflections.archivePlaceholderTokenBudget).toBe(256);
+		expect(config.observationTriggerContextPercent).toBe(50);
+		expect(config.observationTargetContextPercent).toBe(30);
+		expect(config.observationScopePercent).toBe(5);
+		expect(config.reflectionTriggerContextPercent).toBe(12);
+		expect(config.rawMessages.observeThresholdPercent).toBe(50);
+		expect(config.rawMessages.oldestScopePercent).toBe(5);
+		expect(config.observations.reobserveThresholdPercent).toBe(12);
+		expect(config.observations.oldestScopePercent).toBe(6);
+		expect(config.sessionRollover.warnBytes).toBe(10 * 1024 * 1024);
+		expect(config.sessionRollover.targetBytes).toBe(20 * 1024 * 1024);
+		expect(config.sessionRollover.hardBytes).toBe(30 * 1024 * 1024);
+		expect(config.sessionRollover.legacyRecoveryCandidateBytes).toBe(40 * 1024 * 1024);
+		expect(config.sessionRollover.minProjectedSavingsBytes).toBe(3 * 1024 * 1024);
 	});
 
 	test("creates a project config file from current defaults when missing", () => {
 		const projectConfigPath = getProjectConfigPath(tempDir);
+		const markerPath = getProjectConfigBootstrapMarkerPath(tempDir);
 		const result = ensureProjectConfigFile(tempDir);
 		expect(result.created).toBe(true);
+		expect(result.updated).toBe(false);
 		expect(result.path).toBe(projectConfigPath);
 		expect(fs.existsSync(projectConfigPath)).toBe(true);
+		expect(fs.existsSync(markerPath)).toBe(true);
 		expect(JSON.parse(fs.readFileSync(projectConfigPath, "utf8"))).toEqual(DEFAULT_CONFIG);
 	});
 
-	test("does not overwrite an existing project config file", () => {
+	test("overwrites an existing project config file once and keeps a backup", () => {
 		const projectConfigPath = getProjectConfigPath(tempDir);
+		const backupConfigPath = getProjectConfigBootstrapBackupPath(tempDir);
+		const markerPath = getProjectConfigBootstrapMarkerPath(tempDir);
+		const original = { enabled: false, rawMessages: { observeThresholdPercent: 42 } };
 		fs.mkdirSync(path.dirname(projectConfigPath), { recursive: true });
-		fs.writeFileSync(projectConfigPath, JSON.stringify({ enabled: false, rawMessages: { observeThresholdPercent: 42 } }, null, 2));
+		fs.writeFileSync(projectConfigPath, JSON.stringify(original, null, 2));
+
 		const result = ensureProjectConfigFile(tempDir);
 		expect(result.created).toBe(false);
-		expect(JSON.parse(fs.readFileSync(projectConfigPath, "utf8"))).toEqual({ enabled: false, rawMessages: { observeThresholdPercent: 42 } });
+		expect(result.updated).toBe(true);
+		expect(result.backupPath).toBe(backupConfigPath);
+		expect(fs.existsSync(markerPath)).toBe(true);
+		expect(JSON.parse(fs.readFileSync(projectConfigPath, "utf8"))).toEqual(DEFAULT_CONFIG);
+		expect(JSON.parse(fs.readFileSync(backupConfigPath, "utf8"))).toEqual(original);
+
+		fs.writeFileSync(projectConfigPath, JSON.stringify({ enabled: true, preserveRecentMessages: 99 }, null, 2));
+		const second = ensureProjectConfigFile(tempDir);
+		expect(second.created).toBe(false);
+		expect(second.updated).toBe(false);
+		expect(JSON.parse(fs.readFileSync(projectConfigPath, "utf8"))).toEqual({ enabled: true, preserveRecentMessages: 99 });
 	});
 
 	test("supports low observation trigger/target thresholds for <50% guardrails", () => {
