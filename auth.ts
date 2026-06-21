@@ -1,5 +1,7 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 
+const MULTICODEX_PROVIDER = "openai-codex";
+
 export type ResolvedRequestAuth =
 	| {
 			ok: true;
@@ -15,6 +17,15 @@ export type RequestAuth = {
 	apiKey?: string;
 	headers?: Record<string, string>;
 };
+
+export function prefersProviderManagedAuth(model: Pick<Model<Api>, "provider">): boolean {
+	return model.provider === MULTICODEX_PROVIDER;
+}
+
+export function isMissingProviderApiKeyError(error: unknown, provider: string): boolean {
+	const message = error instanceof Error ? error.message : String(error ?? "");
+	return message.includes(`No API key for provider: ${provider}`);
+}
 
 export type CompatibleModelRegistry = {
 	find: (provider: string, modelId: string) => Model<Api> | undefined;

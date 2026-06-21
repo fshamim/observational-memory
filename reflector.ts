@@ -1,6 +1,10 @@
 import { getModel, completeSimple } from "@mariozechner/pi-ai";
 import type { ObservationalMemoryConfig } from "./types";
-import type { RequestAuth } from "./auth";
+import {
+	isMissingProviderApiKeyError,
+	prefersProviderManagedAuth,
+	type RequestAuth,
+} from "./auth";
 import { estimateStringTokens } from "./token-estimator";
 import { buildReflectorSystemPrompt, buildReflectorPrompt } from "./prompts";
 import { chunkTextByTokenBudget } from "./chunking";
@@ -85,12 +89,11 @@ async function runReflectorWithBudget(params: {
 		config.reflectorModel.provider as any,
 		config.reflectorModel.modelId as any,
 	);
-	const auth = await getAuth();
 
 	if (inputTokens <= availablePromptTokens) {
 		const pass = await runReflectorPass({
 			model,
-			auth,
+			getAuth,
 			inputObservations: combinedInput,
 			compressionLevel,
 			timeoutMs,
@@ -115,7 +118,7 @@ async function runReflectorWithBudget(params: {
 		if (rollingCompacted && estimateStringTokens(rollingCompacted) > Math.floor(availablePromptTokens * 0.35)) {
 			rollingCompacted = await compressRollingSummary({
 				model,
-				auth,
+				getAuth,
 				rollingCompacted,
 				compressionLevel: Math.min(3, compressionLevel + 1) as 0 | 1 | 2 | 3,
 				timeoutMs,
@@ -125,7 +128,7 @@ async function runReflectorWithBudget(params: {
 
 		const pass = await runReflectorPass({
 			model,
-			auth,
+			getAuth,
 			inputObservations: rollingCompacted
 				? `## PREVIOUSLY COMPACTED OBSERVATIONS\n\n${rollingCompacted}\n\n## ACTIVE OBSERVATIONS TO COMPRESS\n\n${chunk}`
 				: chunk,
@@ -156,7 +159,7 @@ async function runReflectorWithBudget(params: {
 
 async function compressRollingSummary(params: {
 	model: any;
-	auth: RequestAuth;
+	getAuth: () => Promise<RequestAuth>;
 	rollingCompacted: string;
 	compressionLevel: 0 | 1 | 2 | 3;
 	timeoutMs: number;
@@ -164,7 +167,7 @@ async function compressRollingSummary(params: {
 }): Promise<string> {
 	const pass = await runReflectorPass({
 		model: params.model,
-		auth: params.auth,
+		getAuth: params.getAuth,
 		inputObservations: params.rollingCompacted,
 		compressionLevel: params.compressionLevel,
 		timeoutMs: params.timeoutMs,
@@ -178,7 +181,7 @@ async function compressRollingSummary(params: {
 
 async function runReflectorPass(params: {
 	model: any;
-	auth: RequestAuth;
+	getAuth: () => Promise<RequestAuth>;
 	inputObservations: string;
 	compressionLevel: 0 | 1 | 2 | 3;
 	timeoutMs: number;
@@ -187,40 +190,40 @@ async function runReflectorPass(params: {
 	compactedObservations: string;
 	degenerate: boolean;
 }> {
-	const { model, auth, inputObservations, compressionLevel, timeoutMs, signal } = params;
+	const { model, getAuth, inputObservations, compressionLevel, timeoutMs, signal } = params;
 	const systemPrompt = buildReflectorSystemPrompt();
 	const taskPrompt = buildReflectorPrompt(inputObservations, compressionLevel);
 	const timeout = createTimeoutSignal(timeoutMs, signal);
+	const context = {
+		systemPrompt,
+		messages: [
+			{
+				role: "user" as const,
+				content: [{ type: "text" as const, text: taskPrompt }],
+				timestamp: Date.now(),
+			},
+		],
+	};
+	const baseOptions = { maxTokens: 8192, signal: timeout.signal };
 
 	try {
-		const response = await completeSimple(
-			model,
-			{
-				systemPrompt,
-				messages: [
-					{
-						role: "user" as const,
-						content: [{ type: "text" as const, text: taskPrompt }],
-						timestamp: Date.now(),
-					},
-				],
-			},
-			{ apiKey: auth.apiKey, headers: auth.headers, maxTokens: 8192, signal: timeout.signal },
-		);
-
-		if (response.stopReason === "error") {
-			throw new Error(`Reflector LLM error: ${response.errorMessage || "Unknown error"}`);
+		let output: string;
+		try {
+			const response = await completeSimple(model, context, baseOptions);
+			output = extractReflectorText(response, timeout.signal, timeoutMs);
+		} catch (error) {
+			if (!prefersProviderManagedAuth(model) || !isMissingProviderApiKeyError(error, model.provider)) {
+				throw error;
+			}
+			// ponytail: MultiCodex overrides the provider stream; if it is not present, fall back to direct auth.
+			const auth = await getAuth();
+			const response = await completeSimple(model, context, {
+				...baseOptions,
+				apiKey: auth.apiKey,
+				headers: auth.headers,
+			});
+			output = extractReflectorText(response, timeout.signal, timeoutMs);
 		}
-		if (response.stopReason === "aborted") {
-			throw timeout.signal.reason instanceof Error
-				? timeout.signal.reason
-				: new Error(`Reflector request aborted after ${timeoutMs}ms`);
-		}
-
-		const output = response.content
-			.filter((c: any): c is { type: "text"; text: string } => c.type === "text")
-			.map((c: any) => c.text)
-			.join("\n");
 
 		if (detectDegenerateRepetition(output)) {
 			return { compactedObservations: "", degenerate: true };
@@ -234,6 +237,20 @@ async function runReflectorPass(params: {
 	} finally {
 		timeout.dispose();
 	}
+}
+
+function extractReflectorText(response: any, signal: AbortSignal, timeoutMs: number): string {
+	if (response.stopReason === "error") {
+		throw new Error(`Reflector LLM error: ${response.errorMessage || "Unknown error"}`);
+	}
+	if (response.stopReason === "aborted") {
+		throw signal.reason instanceof Error ? signal.reason : new Error(`Reflector request aborted after ${timeoutMs}ms`);
+	}
+
+	return response.content
+		.filter((c: any): c is { type: "text"; text: string } => c.type === "text")
+		.map((c: any) => c.text)
+		.join("\n");
 }
 
 function detectDegenerateRepetition(text: string): boolean {

@@ -1,7 +1,11 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { getModel, completeSimple } from "@mariozechner/pi-ai";
 import type { ObservationalMemoryConfig } from "./types";
-import type { RequestAuth } from "./auth";
+import {
+	isMissingProviderApiKeyError,
+	prefersProviderManagedAuth,
+	type RequestAuth,
+} from "./auth";
 import { formatMessagesForObserverLines } from "./message-formatter";
 import { buildObserverSystemPrompt, buildObserverTaskPrompt } from "./prompts";
 import { estimateStringTokens } from "./token-estimator";
@@ -87,7 +91,6 @@ async function runObserverWithBudget(params: {
 		config.observerModel.provider as any,
 		config.observerModel.modelId as any,
 	);
-	const auth = await getAuth();
 	const newObservationParts: string[] = [];
 	let rollingObservations = previousObservations.trim();
 	let currentTask: string | undefined;
@@ -97,7 +100,7 @@ async function runObserverWithBudget(params: {
 		const taskPrompt = buildObserverTaskPrompt(chunkText, priorContext);
 		const response = await completeObserverChunk({
 			model,
-			auth,
+			getAuth,
 			systemPrompt,
 			taskPrompt,
 			timeoutMs,
@@ -126,46 +129,60 @@ async function runObserverWithBudget(params: {
 
 async function completeObserverChunk(params: {
 	model: any;
-	auth: RequestAuth;
+	getAuth: () => Promise<RequestAuth>;
 	systemPrompt: string;
 	taskPrompt: string;
 	timeoutMs: number;
 	signal?: AbortSignal;
 }): Promise<string> {
-	const { model, auth, systemPrompt, taskPrompt, timeoutMs, signal } = params;
+	const { model, getAuth, systemPrompt, taskPrompt, timeoutMs, signal } = params;
 	const timeout = createTimeoutSignal(timeoutMs, signal);
-	try {
-		const response = await completeSimple(
-			model,
+	const context = {
+		systemPrompt,
+		messages: [
 			{
-				systemPrompt,
-				messages: [
-					{
-						role: "user" as const,
-						content: [{ type: "text" as const, text: taskPrompt }],
-						timestamp: Date.now(),
-					},
-				],
+				role: "user" as const,
+				content: [{ type: "text" as const, text: taskPrompt }],
+				timestamp: Date.now(),
 			},
-			{ apiKey: auth.apiKey, headers: auth.headers, maxTokens: 4096, signal: timeout.signal },
-		);
-
-		if (response.stopReason === "error") {
-			throw new Error(`Observer LLM error: ${response.errorMessage || "Unknown error"}`);
+		],
+	};
+	const baseOptions = { maxTokens: 4096, signal: timeout.signal };
+	try {
+		try {
+			const response = await completeSimple(model, context, baseOptions);
+			return extractObserverText(response, timeout.signal, timeoutMs);
+		} catch (error) {
+			if (!prefersProviderManagedAuth(model) || !isMissingProviderApiKeyError(error, model.provider)) {
+				throw error;
+			}
+			// ponytail: MultiCodex overrides the provider stream; if it is not present, fall back to direct auth.
 		}
-		if (response.stopReason === "aborted") {
-			throw timeout.signal.reason instanceof Error
-				? timeout.signal.reason
-				: new Error(`Observer request aborted after ${timeoutMs}ms`);
-		}
 
-		return response.content
-			.filter((c: any): c is { type: "text"; text: string } => c.type === "text")
-			.map((c: any) => c.text)
-			.join("\n");
+		const auth = await getAuth();
+		const response = await completeSimple(model, context, {
+			...baseOptions,
+			apiKey: auth.apiKey,
+			headers: auth.headers,
+		});
+		return extractObserverText(response, timeout.signal, timeoutMs);
 	} finally {
 		timeout.dispose();
 	}
+}
+
+function extractObserverText(response: any, signal: AbortSignal, timeoutMs: number): string {
+	if (response.stopReason === "error") {
+		throw new Error(`Observer LLM error: ${response.errorMessage || "Unknown error"}`);
+	}
+	if (response.stopReason === "aborted") {
+		throw signal.reason instanceof Error ? signal.reason : new Error(`Observer request aborted after ${timeoutMs}ms`);
+	}
+
+	return response.content
+		.filter((c: any): c is { type: "text"; text: string } => c.type === "text")
+		.map((c: any) => c.text)
+		.join("\n");
 }
 
 function parseObserverOutput(output: string): {
