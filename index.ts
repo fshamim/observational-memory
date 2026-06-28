@@ -32,6 +32,7 @@ import {
 	estimateArchiveableSavingsBytes,
 	extractBranchMessageEntries,
 } from "./lib/hot-session";
+import { getMessageEntries, readSessionEntriesSync } from "./lib/session-jsonl";
 import {
 	createPendingSwitchToken,
 	deletePendingSwitch,
@@ -64,6 +65,7 @@ import {
 	shouldArmObservation,
 	shouldArmReflection,
 	trimMessagesToTokenBudgetKeepingPairs,
+	planForwardedContextSlice,
 	type OmContextThresholds,
 } from "./pipeline-planner";
 import { buildObservationPromptSections as buildOmPromptSections, stripObservationPromptSuffix as stripOmPromptSuffix } from "./prompt-sections";
@@ -987,6 +989,7 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 	let lastFullMessages: AgentMessage[] = [];
 	let lastUnobservedMessages: AgentMessage[] = [];
 	let lastUnobservedTokens = 0;
+	let lastForwardedUnobservedMessageTokens = 0;
 	let lastContextPercent: number | null = null;
 	let lastRuntimeContextPercent: number | null = null;
 	let lastEstimatedContextPercent: number | null = null;
@@ -1211,6 +1214,16 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 		const nextTokens = estimateStringTokens(basePrompt || "");
 		if (footerState.systemPromptTokens !== nextTokens) {
 			footerState.systemPromptTokens = nextTokens;
+			requestFooterRender();
+		}
+	}
+
+	function syncRawMessageTokenEstimate(messages: AgentMessage[] | number): void {
+		const nextTokens = typeof messages === "number"
+			? Math.max(0, Math.floor(messages))
+			: estimateMessagesTokens(Array.isArray(messages) ? messages : []);
+		if (footerState.rawMessageTokens !== nextTokens) {
+			footerState.rawMessageTokens = nextTokens;
 			requestFooterRender();
 		}
 	}
@@ -1524,6 +1537,7 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 			String(footerState.toolDefinitionTokens),
 			String(footerState.observationTokens),
 			String(footerState.reflectionTokens),
+			String(footerState.rawMessageTokens),
 			footerState.omStatus,
 			footerState.omError,
 			String(footerState.mcpServerCount),
@@ -2091,6 +2105,7 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 
 		lastUnobservedMessages = slice.unobservedMessages;
 		lastUnobservedTokens = slice.unobservedTokens;
+		lastForwardedUnobservedMessageTokens = slice.unobservedTokens;
 
 		if (slice.batch) {
 			lastObservationBatchMessages = slice.batch.messages;
@@ -2556,7 +2571,7 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 					});
 					footerState.observationTokens = state.totalObservationTokens;
 					footerState.experienceTokens = state.totalExperienceTokens;
-					footerState.reflectionTokens = state.totalReflectionTokens;
+					footerState.reflectionTokens = getReflectionTokenTotal(state);
 					syncReflectionArmedState();
 					persistState(pi, state, "observation");
 					forceObservationOnNextTurn = computeObservationRearmDecision({
@@ -2798,6 +2813,30 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 		state.rawMessageCursor = getObservationCursor(state);
 		computeQueueTokenTotals(state);
 
+		let bootstrapMessages = getMessageEntries(entries)
+			.map((entry) => entry.message as AgentMessage)
+			.filter((message) => Boolean(message));
+
+		if (bootstrapMessages.length === 0) {
+			const sessionFilePath = String(ctx?.sessionManager?.getSessionFile?.() || "");
+			if (sessionFilePath && fs.existsSync(sessionFilePath)) {
+				try {
+					bootstrapMessages = readSessionEntriesSync(sessionFilePath)
+						.filter((entry) => entry.type === "message")
+						.map((entry) => entry.message as AgentMessage)
+						.filter((message) => Boolean(message));
+				} catch {
+					bootstrapMessages = [];
+				}
+			}
+		}
+
+		if (bootstrapMessages.length > 0) {
+			syncRawMessageTokenEstimate(bootstrapMessages);
+			lastFullMessages = bootstrapMessages;
+			lastFullMessageCount = bootstrapMessages.length;
+		}
+
 		footerState.isWorktree = detectWorktree();
 		let allTools: Array<{ name: string }> | undefined;
 		try {
@@ -2896,6 +2935,8 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 
 		let { cursorIndex } = refreshPendingContextSlice(messages);
 		const thresholds = getContextThresholds();
+		let outputMessages = lastUnobservedMessages;
+		let outputMessagesTokens = lastUnobservedTokens;
 		refreshContextPressureSnapshot(ctx);
 
 		forceObservationOnNextTurn = shouldArmObservation({
@@ -2910,43 +2951,47 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 
 		syncReflectionArmedState();
 
-		let outputMessages = lastUnobservedMessages;
-		const needsGuardrailTrim =
-			lastContextPercent !== null &&
-			lastContextPercent > thresholds.observationTargetPercent &&
-			outputMessages.length > 0;
-		if (needsGuardrailTrim) {
-			const trimmed = trimMessagesToTokenBudget(outputMessages, thresholds.observationTargetTokens);
-			if (trimmed && trimmed.messages.length > 0 && trimmed.messages.length < outputMessages.length) {
-				outputMessages = trimmed.messages;
-				forceObservationOnNextTurn = true;
+		const forwarded = planForwardedContextSlice({
+			unobservedMessages: lastUnobservedMessages,
+			unobservedTokens: lastUnobservedTokens,
+			shouldTrim:
+				lastContextPercent !== null &&
+				lastContextPercent > thresholds.observationTargetPercent,
+			observationTargetTokens: thresholds.observationTargetTokens,
+		});
 
-				// Footer-only UI correction: show the context slice actually forwarded this turn.
-				// Keep scheduling logic based on lastContextPercent unchanged.
-				footerState.contextTokens = trimmed.tokens;
-				footerState.contextPercent = computeContextPercent(trimmed.tokens, getEffectiveContextWindow());
+		outputMessages = forwarded.messages;
+		outputMessagesTokens = forwarded.messageTokens;
+		if (forwarded.trimmed || forwarded.forceObservationOnNextTurn) {
+			forceObservationOnNextTurn = true;
 
-				appendDiagnostic(
-					"warning",
-					"observe",
-					"Applied emergency context guardrail slice to stay under observation target",
-					{
-						cursorIndex,
-						originalMessages: lastUnobservedMessages.length,
-						originalTokens: lastUnobservedTokens,
-						trimmedMessages: trimmed.messages.length,
-						trimmedTokens: trimmed.tokens,
-						targetTokens: thresholds.observationTargetTokens,
-						runtimePercent: lastRuntimeContextPercent,
-						estimatedPercent: lastEstimatedContextPercent,
-						effectivePercent: lastContextPercent,
-						preflightObservationScheduled,
-						preflightObservationCompleted,
-					},
-				);
-			}
+			// Footer-only UI correction: show the context slice actually forwarded this turn.
+			// Keep scheduling logic based on lastContextPercent unchanged.
+			footerState.contextTokens = outputMessagesTokens;
+			footerState.contextPercent = computeContextPercent(outputMessagesTokens, getEffectiveContextWindow());
+
+			appendDiagnostic(
+				"warning",
+				"observe",
+				"Applied emergency context guardrail slice to stay under observation target",
+				{
+					cursorIndex,
+					originalMessages: lastUnobservedMessages.length,
+					originalTokens: lastUnobservedTokens,
+					trimmedMessages: outputMessages.length,
+					trimmedTokens: outputMessagesTokens,
+					targetTokens: thresholds.observationTargetTokens,
+					runtimePercent: lastRuntimeContextPercent,
+					estimatedPercent: lastEstimatedContextPercent,
+					effectivePercent: lastContextPercent,
+					preflightObservationScheduled,
+					preflightObservationCompleted,
+				},
+			);
 		}
 
+		lastForwardedUnobservedMessageTokens = outputMessagesTokens;
+		syncRawMessageTokenEstimate(outputMessagesTokens);
 		footerState.observationTokens = state.totalObservationTokens;
 		footerState.experienceTokens = state.totalExperienceTokens;
 		footerState.reflectionTokens = getReflectionTokenTotal(state);
@@ -3197,6 +3242,7 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 
 		syncRuntimeUiState(ctx);
 		refreshContextPressureSnapshot(ctx);
+		syncRawMessageTokenEstimate(lastForwardedUnobservedMessageTokens);
 		footerState.observationTokens = state.totalObservationTokens;
 		footerState.experienceTokens = state.totalExperienceTokens;
 		footerState.reflectionTokens = getReflectionTokenTotal(state);
@@ -3333,7 +3379,7 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 						`  System prompt tokens (base): ~${baseSystemPromptTokens}`,
 						`  OM injected prompt tokens: ~${omInjectedPromptTokens}`,
 						`  Effective system prompt tokens (base+OM): ~${effectiveSystemPromptTokens}`,
-						`  Footer composition buckets: sys=~${footerState.systemPromptTokens}, tools=~${footerState.toolDefinitionTokens}, obs=~${footerState.observationTokens}, exp=~${footerState.experienceTokens}, ref=~${footerState.reflectionTokens}`,
+						`  Footer composition buckets: sys=~${footerState.systemPromptTokens}, tools=~${footerState.toolDefinitionTokens}, obs=~${footerState.observationTokens}, exp=~${footerState.experienceTokens}, ref=~${footerState.reflectionTokens}, raw=~${footerState.rawMessageTokens}`,
 						`  Generation: ${state.generationCount}`,
 						`  Observations: ${state.observations.length} item(s) / ~${state.totalObservationTokens} tokens`,
 						`  Reflections: ${state.reflections.length} item(s) / ~${getReflectionTokenTotal(state)} tokens`,

@@ -225,6 +225,40 @@ export function computeOmContextPressure(args: {
 	};
 }
 
+export interface ForwardedContextSlicePlan {
+	messages: AgentMessage[];
+	messageTokens: number;
+	trimmed: boolean;
+	forceObservationOnNextTurn: boolean;
+}
+
+export function planForwardedContextSlice(args: {
+	unobservedMessages: AgentMessage[];
+	unobservedTokens: number;
+	shouldTrim: boolean;
+	observationTargetTokens: number;
+}): ForwardedContextSlicePlan {
+	const output = {
+		messages: args.unobservedMessages,
+		messageTokens: Math.max(0, Math.floor(args.unobservedTokens)),
+		trimmed: false,
+		forceObservationOnNextTurn: false,
+	};
+	if (!args.shouldTrim || args.unobservedMessages.length === 0) return output;
+
+	const trimmed = trimMessagesToTokenBudgetKeepingPairs(args.unobservedMessages, args.observationTargetTokens);
+	if (trimmed && trimmed.messages.length > 0 && trimmed.messages.length < args.unobservedMessages.length) {
+		return {
+			messages: trimmed.messages,
+			messageTokens: trimmed.tokens,
+			trimmed: true,
+			forceObservationOnNextTurn: true,
+		};
+	}
+
+	return output;
+}
+
 export function trimMessagesToTokenBudgetKeepingPairs(
 	messages: AgentMessage[],
 	targetTokens: number,
