@@ -3,7 +3,7 @@
  * git info, observational memory awareness, and pass-through extension statuses.
  *
  * Line 1: model + context meter + context composition legend (sys/tools/exp/obs/ref/msg)
- * Line 2: cwd/branch/diff + MCP/OM status
+ * Line 2: cwd/branch/diff + OM status
  * Line 3: other extension statuses (when present)
  *
  * Uses Nerd Font icons — ensure your terminal font supports them.
@@ -45,6 +45,8 @@ export interface FooterState {
 	observationTokens: number;
 	experienceTokens: number;
 	reflectionTokens: number;
+	// Non-observed raw message tail used in current context batch.
+	rawMessageTokens: number;
 	omStatus: string;
 	omError: string;
 
@@ -84,6 +86,7 @@ export function createFooterState(): FooterState {
 		observationTokens: 0,
 		experienceTokens: 0,
 		reflectionTokens: 0,
+		rawMessageTokens: 0,
 		omStatus: "",
 		omError: "",
 		codexAccountName: "",
@@ -224,11 +227,12 @@ function deriveComposition(state: FooterState): Composition {
 	const rawExp = Math.max(0, state.experienceTokens);
 	const rawObs = Math.max(0, state.observationTokens);
 	const rawRef = Math.max(0, state.reflectionTokens);
-	const known = rawSys + rawTools + rawExp + rawObs + rawRef;
+	const rawMsg = Math.max(0, state.rawMessageTokens);
+	const known = rawSys + rawTools + rawExp + rawObs + rawRef + rawMsg;
 
 	const targetTotal = state.contextTokens ?? known;
 	if (targetTotal <= 0) {
-		return { sys: rawSys, tools: rawTools, exp: rawExp, obs: rawObs, ref: rawRef, msg: 0, total: 0 };
+		return { sys: rawSys, tools: rawTools, exp: rawExp, obs: rawObs, ref: rawRef, msg: rawMsg, total: 0 };
 	}
 
 	// If known buckets exceed measured context usage, scale down proportionally.
@@ -238,9 +242,10 @@ function deriveComposition(state: FooterState): Composition {
 		let exp = Math.max(0, Math.round(rawExp * (targetTotal / known)));
 		let obs = Math.max(0, Math.round(rawObs * (targetTotal / known)));
 		let ref = Math.max(0, Math.round(rawRef * (targetTotal / known)));
+		let msg = Math.max(0, Math.round(rawMsg * (targetTotal / known)));
 
-		let delta = targetTotal - (sys + tools + exp + obs + ref);
-		const order: Array<"ref" | "obs" | "exp" | "tools" | "sys"> = ["ref", "obs", "exp", "tools", "sys"];
+		let delta = targetTotal - (sys + tools + exp + obs + ref + msg);
+		const order: Array<"ref" | "obs" | "exp" | "tools" | "sys" | "msg"> = ["ref", "obs", "exp", "tools", "sys", "msg"];
 		let guard = 0;
 		while (delta !== 0 && guard < 1000) {
 			guard++;
@@ -251,7 +256,8 @@ function deriveComposition(state: FooterState): Composition {
 					else if (key === "tools") tools++;
 					else if (key === "exp") exp++;
 					else if (key === "obs") obs++;
-					else ref++;
+					else if (key === "ref") ref++;
+					else msg++;
 					delta--;
 				} else {
 					if (key === "sys" && sys > 0) {
@@ -269,16 +275,26 @@ function deriveComposition(state: FooterState): Composition {
 					} else if (key === "ref" && ref > 0) {
 						ref--;
 						delta++;
+					} else if (key === "msg" && msg > 0) {
+						msg--;
+						delta++;
 					}
 				}
 			}
 		}
 
-		return { sys, tools, exp, obs, ref, msg: 0, total: targetTotal };
+		return { sys, tools, exp, obs, ref, msg, total: targetTotal };
 	}
 
-	const msg = Math.max(0, targetTotal - known);
-	return { sys: rawSys, tools: rawTools, exp: rawExp, obs: rawObs, ref: rawRef, msg, total: targetTotal };
+	return {
+		sys: rawSys,
+		tools: rawTools,
+		exp: rawExp,
+		obs: rawObs,
+		ref: rawRef,
+		msg: rawMsg,
+		total: targetTotal,
+	};
 }
 
 function colorizeMeterSegment(theme: Theme, token: "dim" | "accent" | "warning" | "success" | "exp" | "ref", width: number): string {
@@ -399,6 +415,7 @@ class CustomFooterComponent implements Component {
 			String(s.observationTokens),
 			String(s.experienceTokens),
 			String(s.reflectionTokens),
+			String(s.rawMessageTokens),
 			s.omStatus,
 			s.omError,
 			String(s.mcpServerCount),
@@ -417,6 +434,7 @@ class CustomFooterComponent implements Component {
 			String(s.observationTokens),
 			String(s.experienceTokens),
 			String(s.reflectionTokens),
+			String(s.rawMessageTokens),
 			String(s.contextTokens ?? ""),
 		].join("|");
 		if (key === this.cachedCompositionKey) {
@@ -549,9 +567,6 @@ class CustomFooterComponent implements Component {
 		if (budget <= 0) return "";
 
 		const sections: string[] = [];
-		const mcpSection = this.buildMcpSummary();
-		if (mcpSection) sections.push(mcpSection);
-
 		const omSection = this.buildOmSummary();
 		if (omSection) sections.push(omSection);
 
@@ -561,12 +576,6 @@ class CustomFooterComponent implements Component {
 			budget,
 			(omitted) => this.theme.fg("dim", `+${omitted}`),
 		);
-	}
-
-	private buildMcpSummary(): string {
-		const s = this.state;
-		if (s.mcpServerCount <= 0) return "";
-		return fg256(37, `${ICON.network} ${s.mcpServerCount} • mcp`);
 	}
 
 	private getOtherExtensionStatusText(): string {

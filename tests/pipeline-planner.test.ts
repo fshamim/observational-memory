@@ -7,10 +7,12 @@ import {
 	computeOmContextPressure,
 	computeOmContextThresholds,
 	planPendingObservationSlice,
+	planForwardedContextSlice,
 	shouldArmObservation,
 	shouldArmReflection,
 	trimMessagesToTokenBudgetKeepingPairs,
 } from "../pipeline-planner";
+import { estimateMessagesTokens } from "../token-estimator";
 import {
 	appendObservationResult,
 	appendReflectionFromObservations,
@@ -125,5 +127,44 @@ describe("pipeline planner", () => {
 		expect(trimmed).not.toBeNull();
 		expect(trimmed!.messages.some((message: any) => message.role === "assistant")).toBe(true);
 		expect(trimmed!.messages.some((message: any) => message.role === "toolResult")).toBe(true);
+	});
+
+	test("forwards a trimmed context slice instead of the full unobserved tail when guardrail is active", () => {
+		const messages = [
+			user("a".repeat(120)),
+			user("b".repeat(120)),
+			user("c".repeat(120)),
+			user("latest"),
+		] as any as AgentMessage[];
+		const unobservedTokens = estimateMessagesTokens(messages);
+		const plan = planForwardedContextSlice({
+			unobservedMessages: messages,
+			unobservedTokens,
+			shouldTrim: true,
+			observationTargetTokens: 70,
+		});
+		expect(plan.trimmed).toBe(true);
+		expect(plan.forceObservationOnNextTurn).toBe(true);
+		expect(plan.messages).toHaveLength(2);
+		expect(plan.messageTokens).toBeLessThan(unobservedTokens);
+		expect(plan.messageTokens).toBeLessThanOrEqual(70);
+		expect(plan.messageTokens).toBe(estimateMessagesTokens(plan.messages));
+		expect((plan.messages[0] as any).content).toBe("c".repeat(120));
+		expect((plan.messages[1] as any).content).toBe("latest");
+	});
+
+	test("keeps the full unobserved tail when guardrail is inactive", () => {
+		const messages = [user("small"), user("tail")];
+		const unobservedTokens = 100;
+		const plan = planForwardedContextSlice({
+			unobservedMessages: messages,
+			unobservedTokens,
+			shouldTrim: false,
+			observationTargetTokens: 1,
+		});
+		expect(plan.trimmed).toBe(false);
+		expect(plan.forceObservationOnNextTurn).toBe(false);
+		expect(plan.messages).toHaveLength(2);
+		expect(plan.messageTokens).toBe(unobservedTokens);
 	});
 });
