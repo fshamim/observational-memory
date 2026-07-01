@@ -129,18 +129,18 @@ export const DEFAULT_CONFIG: ObservationalMemoryConfig = {
 
 	// Public/legacy top-level mirror of the observation trigger. This is the
 	// context-usage percent where OM starts trying to observe older raw messages.
-	// Example at 272k: 45% = 122,400 tokens.
+	// Example at 272k: 50% = 136,000 tokens.
 	observationTriggerContextPercent: 50,
 
 	// Public/legacy top-level mirror of the observation target. After OM starts
 	// observing, it tries to get effective context usage back down toward this
 	// target instead of hovering right at the trigger.
-	// Example at 272k: 25% = 68,000 tokens.
+	// Example at 272k: 30% = 81,600 tokens.
 	observationTargetContextPercent: 30,
 
 	// Legacy top-level scope hint for how much of the oldest still-unobserved raw
 	// history may be considered in one observation planning pass.
-	// Example at 272k: 65% = 176,800 tokens of the oldest raw backlog can be in
+	// Example at 272k: 5% = 13,600 tokens of the oldest raw backlog can be in
 	// scope before other guards trim further.
 	observationScopePercent: 5,
 
@@ -149,21 +149,20 @@ export const DEFAULT_CONFIG: ObservationalMemoryConfig = {
 	preserveRecentMessages: 12,
 
 	// Never schedule an observation batch smaller than this many messages.
-	// `1` allows OM to make progress even when only a single safe message remains.
+	// `10` lets OM keep a meaningful minimum batch size while still making progress.
 	minObservationMessages: 10,
 
 	// Public/legacy top-level reflection trigger mirror. This represents the
 	// normalized reflection trigger percent after config loading.
-	// Example at 272k: 10% = 27,200 tokens.
+	// Example at 272k: 12% = 32,640 tokens.
 	// Note: with the current nested defaults below, the effective reobserve
-	// trigger is driven by `observations.reobserveThresholdPercent` (15%).
+	// trigger is driven by `observations.reobserveThresholdPercent` (12%).
 	reflectionTriggerContextPercent: 12,
 
 	// Once reflection/compaction starts, OM tries to reduce observation pressure
 	// toward this target rather than stopping exactly at the trigger.
 	// Example at 272k: 5% = 13,600 tokens.
 	reflectionTargetContextPercent: 5,
-
 	// Fallback context window used only when runtime/model metadata does not
 	// provide a better value. Threshold comments in this file still use 272k
 	// because that is the common live runtime example.
@@ -237,22 +236,22 @@ export const DEFAULT_CONFIG: ObservationalMemoryConfig = {
 	},
 
 	sessionRollover: {
-		// Allow OM to prepare/suggest session rollover for very large session files.
+		// Enable session rollover checks to avoid OM session files becoming too large.
 		enabled: true,
 
-		// Start warning when the session file reaches about 150 MiB.
+		// Start warning when the session file reaches about 10 MiB.
 		warnBytes: 10 * 1024 * 1024,
 
-		// Preferred rollover target point: about 200 MiB.
+		// Prefer staging rollover around 20 MiB.
 		targetBytes: 20 * 1024 * 1024,
 
-		// Stronger guardrail: beyond about 250 MiB, rollover becomes urgent.
+		// Force/urgent rollover around 30 MiB.
 		hardBytes: 30 * 1024 * 1024,
 
 		// Legacy recovery threshold for especially bloated historical sessions.
 		legacyRecoveryCandidateBytes: 40 * 1024 * 1024,
 
-		// Only bother rolling over if OM estimates it can save at least ~50 MiB.
+		// Only bother rolling over if OM estimates it can save at least ~3 MiB.
 		minProjectedSavingsBytes: 3 * 1024 * 1024,
 	},
 
@@ -296,14 +295,13 @@ export const DEFAULT_CONFIG: ObservationalMemoryConfig = {
 
 	rawMessages: {
 		// Effective observation trigger used by runtime threshold math.
-		// At a 272k window: 45% = 122,400 tokens.
-		// Because cacheOptimization caps usable prompt share at 60%, this 49%
-		// remains valid; if you set this above 59%, the cap would clamp it.
+		// At a 272k window: 50% = 136,000 tokens.
+		// Because cacheOptimization caps usable prompt share at 60%, practical usage
+		// remains bounded by that cap if this is set higher.
 		observeThresholdPercent: 50,
 
-		// Observation planner starts from roughly the oldest 25% slice of the raw
-		// backlog when choosing what to observe next.
-		// At a 272k window: 25% = 68,000 tokens worth of oldest raw history.
+		// Observation planner starts from the oldest backlog slice first.
+		// At 272k tokens total, 5% = 13,600 tokens worth of oldest raw history.
 		oldestScopePercent: 5,
 	},
 
@@ -311,12 +309,11 @@ export const DEFAULT_CONFIG: ObservationalMemoryConfig = {
 		// Reflection trigger for the `reobserve` strategy. Once total observation
 		// tokens reach this threshold, OM becomes eligible to compact them into a
 		// smaller representation (subject to checkpoint cadence gates).
-		// At a 272k window: 15% = 40,800 tokens.
+		// At a 272k window: 12% = 32,640 tokens.
 		reobserveThresholdPercent: 12,
 
-		// During reobserve compaction, focus first on the oldest 25% slice of the
-		// observation backlog.
-		// At a 272k window: 25% = 68,000 tokens worth of oldest observations.
+		// During reobserve compaction, focus first on the oldest backlog slice.
+		// At 272k tokens total, 6% = 16,320 tokens worth of oldest observations.
 		oldestScopePercent: 6,
 	},
 

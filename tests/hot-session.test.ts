@@ -86,4 +86,70 @@ describe("hot session builder", () => {
 			fs.rmSync(cwd, { recursive: true, force: true });
 		}
 	});
+
+	test("rebuilding the same hot session includes delayed messages before switch", () => {
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "om-hot-refresh-"));
+		try {
+			const sourceSessionPath = path.join(cwd, "source.jsonl");
+			const baseEntries = [
+				{ type: "session", version: 3, id: "s1", timestamp: new Date().toISOString(), cwd },
+				{ type: "session_info", id: "si1", parentId: "s1", timestamp: new Date().toISOString(), name: "ghostclaw-main" },
+				{ type: "message", id: "m1", parentId: "si1", timestamp: new Date().toISOString(), message: { role: "user", content: "old covered message" } },
+				{ type: "message", id: "m2", parentId: "m1", timestamp: new Date().toISOString(), message: { role: "assistant", content: "first retained reply" } },
+			];
+			fs.writeFileSync(sourceSessionPath, baseEntries.map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+			const targetHotSessionPath = createHotSessionPath(sourceSessionPath);
+			const state = {
+				activeObservations: "obs",
+				compactedObservations: "",
+				generationCount: 1,
+				lastObservedMessageIndex: 1,
+				lastObservedTimestamp: new Date().toISOString(),
+				totalObservationTokens: 10,
+				totalCompactedTokens: 0,
+			};
+
+			buildHotSessionBundle({
+				cwd,
+				sessionName: "ghostclaw-main",
+				token: "tok-refresh",
+				reason: "test",
+				sourceSessionPath,
+				targetHotSessionPath,
+				allEntries: baseEntries as any,
+				branchEntries: baseEntries.slice(1) as any,
+				branchMessageEntries: extractBranchMessageEntries(baseEntries.slice(1) as any),
+				safeMessageStartIndex: 1,
+				state: state as any,
+				config: DEFAULT_CONFIG as any,
+			});
+
+			const delayedEntries = [
+				...baseEntries,
+				{ type: "message", id: "m3", parentId: "m2", timestamp: new Date().toISOString(), message: { role: "user", content: "delayed user message" } },
+				{ type: "message", id: "m4", parentId: "m3", timestamp: new Date().toISOString(), message: { role: "assistant", content: "delayed assistant reply" } },
+			];
+			fs.writeFileSync(sourceSessionPath, delayedEntries.map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+			buildHotSessionBundle({
+				cwd,
+				sessionName: "ghostclaw-main",
+				token: "tok-refresh",
+				reason: "switch",
+				sourceSessionPath,
+				targetHotSessionPath,
+				allEntries: delayedEntries as any,
+				branchEntries: delayedEntries.slice(1) as any,
+				branchMessageEntries: extractBranchMessageEntries(delayedEntries.slice(1) as any),
+				safeMessageStartIndex: 1,
+				state: state as any,
+				config: DEFAULT_CONFIG as any,
+			});
+
+			const rebuilt = readSessionEntriesSync(targetHotSessionPath);
+			expect(rebuilt.some((entry) => entry.id === "m3" && JSON.stringify(entry).includes("delayed user message"))).toBe(true);
+			expect(rebuilt.some((entry) => entry.id === "m4" && JSON.stringify(entry).includes("delayed assistant reply"))).toBe(true);
+		} finally {
+			fs.rmSync(cwd, { recursive: true, force: true });
+		}
+	});
 });

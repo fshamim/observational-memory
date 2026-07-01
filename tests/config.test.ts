@@ -95,6 +95,26 @@ describe("OM config loading", () => {
 		expect(config.sessionRollover.minProjectedSavingsBytes).toBe(3 * 1024 * 1024);
 	});
 
+	test("session rollover byte thresholds are clamped to a 10-50 MiB range", () => {
+		fs.writeFileSync(
+			globalConfigPath,
+			JSON.stringify({
+				sessionRollover: {
+					warnBytes: 4 * 1024 * 1024,
+					targetBytes: 99 * 1024 * 1024,
+					hardBytes: 70 * 1024 * 1024,
+					legacyRecoveryCandidateBytes: 4 * 1024 * 1024,
+				},
+			}),
+		);
+
+		const config = loadConfig(tempDir);
+		expect(config.sessionRollover.warnBytes).toBe(10 * 1024 * 1024);
+		expect(config.sessionRollover.targetBytes).toBe(50 * 1024 * 1024);
+		expect(config.sessionRollover.hardBytes).toBe(50 * 1024 * 1024);
+		expect(config.sessionRollover.legacyRecoveryCandidateBytes).toBe(10 * 1024 * 1024);
+	});
+
 	test("creates a project config file from current defaults when missing", () => {
 		const projectConfigPath = getProjectConfigPath(tempDir);
 		const markerPath = getProjectConfigBootstrapMarkerPath(tempDir);

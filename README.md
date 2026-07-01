@@ -321,27 +321,27 @@ All defaults below come from `extensions/observational-memory/types.ts`.
 - default: `10485760` (~10 MiB)
 - type: number
 - warning threshold for growing session files
-- clamp range: `8388608..Number.MAX_SAFE_INTEGER`
+- clamp range: `10485760..52428800`
 
 #### `sessionRollover.targetBytes`
 - default: `20971520` (~20 MiB)
 - type: number
 - preferred rollover target point
-- clamp range: `16777216..Number.MAX_SAFE_INTEGER`
+- clamp range: `10485760..52428800`
 - normalized so final value is always at least `warnBytes`
 
 #### `sessionRollover.hardBytes`
 - default: `31457280` (~30 MiB)
 - type: number
 - harder rollover guardrail
-- clamp range: `25165824..Number.MAX_SAFE_INTEGER`
+- clamp range: `10485760..52428800`
 - normalized so final value is always at least `targetBytes`
 
 #### `sessionRollover.legacyRecoveryCandidateBytes`
 - default: `41943040` (~40 MiB)
 - type: number
 - threshold for old very-large sessions that may need recovery treatment
-- clamp range: `33554432..Number.MAX_SAFE_INTEGER`
+- clamp range: `10485760..Number.MAX_SAFE_INTEGER`
 
 #### `sessionRollover.minProjectedSavingsBytes`
 - default: `3145728` (~3 MiB)
