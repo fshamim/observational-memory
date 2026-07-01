@@ -163,10 +163,10 @@ function resolveSessionRolloverConfig(merged: Record<string, unknown>): SessionR
 	const raw = isPlainObject(merged.sessionRollover) ? merged.sessionRollover : {};
 	return {
 		enabled: asBoolean(raw.enabled, DEFAULT_CONFIG.sessionRollover.enabled),
-		warnBytes: clampNumber(raw.warnBytes, DEFAULT_CONFIG.sessionRollover.warnBytes, 8 * 1024 * 1024, Number.MAX_SAFE_INTEGER),
-		targetBytes: clampNumber(raw.targetBytes, DEFAULT_CONFIG.sessionRollover.targetBytes, 16 * 1024 * 1024, Number.MAX_SAFE_INTEGER),
-		hardBytes: clampNumber(raw.hardBytes, DEFAULT_CONFIG.sessionRollover.hardBytes, 24 * 1024 * 1024, Number.MAX_SAFE_INTEGER),
-		legacyRecoveryCandidateBytes: clampNumber(raw.legacyRecoveryCandidateBytes, DEFAULT_CONFIG.sessionRollover.legacyRecoveryCandidateBytes, 32 * 1024 * 1024, Number.MAX_SAFE_INTEGER),
+		warnBytes: clampNumber(raw.warnBytes, DEFAULT_CONFIG.sessionRollover.warnBytes, 10 * 1024 * 1024, 50 * 1024 * 1024),
+		targetBytes: clampNumber(raw.targetBytes, DEFAULT_CONFIG.sessionRollover.targetBytes, 10 * 1024 * 1024, 50 * 1024 * 1024),
+		hardBytes: clampNumber(raw.hardBytes, DEFAULT_CONFIG.sessionRollover.hardBytes, 10 * 1024 * 1024, 50 * 1024 * 1024),
+		legacyRecoveryCandidateBytes: clampNumber(raw.legacyRecoveryCandidateBytes, DEFAULT_CONFIG.sessionRollover.legacyRecoveryCandidateBytes, 10 * 1024 * 1024, Number.MAX_SAFE_INTEGER),
 		minProjectedSavingsBytes: clampNumber(raw.minProjectedSavingsBytes, DEFAULT_CONFIG.sessionRollover.minProjectedSavingsBytes, 1 * 1024 * 1024, Number.MAX_SAFE_INTEGER),
 	};
 }

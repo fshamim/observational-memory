@@ -4,6 +4,7 @@ import type {
 	ObservationState,
 	ObservationStateEntry,
 	ObservationDiagnosticEntry,
+	PendingSessionSwitchRecord,
 } from "./types";
 import { ROLLOVER_ENTRY_TYPE } from "./types";
 import { ensureProjectConfigFile, loadConfig } from "./config";
@@ -1039,6 +1040,7 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 	let lastBranchMessageEntries: any[] = [];
 	let sessionRolloverInFlight = false;
 	let pendingSessionSwitchToken: string | null = null;
+	let lastPendingSwitchRefreshBytes = 0;
 	let lastSessionFileSizeBytes = 0;
 	let lastProjectedHotSessionBytes = 0;
 	let lastRolloverReason = "";
@@ -1283,6 +1285,88 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 		);
 	}
 
+	function refreshPendingHotSession(
+		ctx: any,
+		pending: PendingSessionSwitchRecord,
+		reason: string,
+		force = false,
+	): PendingSessionSwitchRecord | null {
+		const sourceSessionPath = String(pending?.sourceSessionPath || "");
+		const targetSessionPath = String(pending?.targetSessionPath || "");
+		const token = String(pending?.token || "");
+		if (!sourceSessionPath || !targetSessionPath || !token || !fs.existsSync(sourceSessionPath)) return null;
+
+		const currentSessionFile = String(ctx?.sessionManager?.getSessionFile?.() || "");
+		if (currentSessionFile && path.resolve(currentSessionFile) !== path.resolve(sourceSessionPath)) return null;
+
+		const currentBytes = fs.statSync(sourceSessionPath).size;
+		if (!force && currentBytes === lastPendingSwitchRefreshBytes && fs.existsSync(targetSessionPath)) return null;
+
+		let allEntries = ctx?.sessionManager?.getEntries?.() || [];
+		if (allEntries.length === 0) {
+			allEntries = readSessionEntriesSync(sourceSessionPath);
+		}
+		let branchEntries = lastBranchEntries.length > 0 ? lastBranchEntries : ctx?.sessionManager?.getBranch?.() || [];
+		if (branchEntries.length === 0 && allEntries.length > 0) {
+			branchEntries = allEntries.filter((entry: any) => entry?.type !== "session");
+		}
+		const branchMessageEntries = extractBranchMessageEntries(branchEntries);
+		if (branchMessageEntries.length === 0) return null;
+
+		const messageModels = branchMessageEntries.map((entry: any) => entry.message as AgentMessage);
+		const safeMessageStartIndex = alignCursorToToolCallPairs(
+			messageModels,
+			Math.min(getObservationCursor(state), branchMessageEntries.length),
+		);
+		const sessionName = pending.sessionName ||
+			resolveSessionLabel(ctx) ||
+			sanitizeSessionKey(path.basename(sourceSessionPath, path.extname(sourceSessionPath)));
+		const rolloverReason = pending.reason || reason;
+		const bundle = buildHotSessionBundle({
+			cwd: process.cwd(),
+			sessionName,
+			token,
+			reason: rolloverReason,
+			sourceSessionPath,
+			targetHotSessionPath: targetSessionPath,
+			allEntries,
+			branchEntries,
+			branchMessageEntries,
+			safeMessageStartIndex,
+			state,
+			config,
+		});
+		savePendingSwitch(bundle.pendingRecord, process.cwd());
+		pendingSessionSwitchToken = token;
+		lastPendingSwitchRefreshBytes = currentBytes;
+		lastSessionFileSizeBytes = currentBytes;
+		lastProjectedHotSessionBytes = bundle.projectedHotBytes;
+		lastRolloverReason = rolloverReason;
+		writeJsonFileAtomic(getRecoveryReportPath(sessionName, process.cwd()), {
+			type: "rollover",
+			createdAt: new Date().toISOString(),
+			sourceSessionPath,
+			targetHotSessionPath: targetSessionPath,
+			currentBytes,
+			projectedHotBytes: bundle.projectedHotBytes,
+			coveredEntryIds: bundle.coveredEntryIds,
+			trimmedEntryIds: bundle.trimmedEntryIds,
+			archiveChunks: bundle.archiveChunks,
+			reason: rolloverReason,
+		});
+		appendDiagnostic("info", "rollover", "Refreshed pending OM hot-session rollover", {
+			token,
+			reason,
+			sessionName,
+			currentBytes,
+			projectedHotBytes: bundle.projectedHotBytes,
+			coveredEntries: bundle.coveredEntryIds.length,
+			trimmedEntries: bundle.trimmedEntryIds.length,
+			targetHotSessionPath: targetSessionPath,
+		});
+		return bundle.pendingRecord;
+	}
+
 	async function runPendingSessionSwitch(ctx: any, explicitToken?: string): Promise<boolean> {
 		const resolved = resolvePendingSwitchRecord(ctx, explicitToken);
 		const requestedToken = resolveLatestPendingSwitchToken(ctx, explicitToken) || String(explicitToken || "").trim();
@@ -1293,16 +1377,19 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 			await ctx.ui.notify(detail, "warning");
 			return false;
 		}
-		const { token, pending } = resolved;
-		if (!fs.existsSync(pending.targetSessionPath)) {
-			await ctx.ui.notify(`Target hot session is missing: ${pending.targetSessionPath}`, "error");
-			return false;
-		}
+		const { token } = resolved;
+		let pending = resolved.pending as PendingSessionSwitchRecord;
 		setTransientActivityStatus(styleStatus("warning", "⟳ OM switching session"));
 		const previousState = state;
-		const hasNextState = Boolean(pending?.nextState && typeof pending.nextState === "object");
 		try {
 			await ctx.waitForIdle();
+			pending = refreshPendingHotSession(ctx, pending, "switch", true) || pending;
+			if (!fs.existsSync(pending.targetSessionPath)) {
+				await ctx.ui.notify(`Target hot session is missing: ${pending.targetSessionPath}`, "error");
+				clearTransientActivityStatus();
+				return false;
+			}
+			const hasNextState = Boolean(pending?.nextState && typeof pending.nextState === "object");
 			if (hasNextState) {
 				saveStateToFile(getStatePath(), pending.nextState as ObservationState);
 			}
@@ -1321,7 +1408,7 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 			}
 			return true;
 		} catch (error) {
-			if (hasNextState) {
+			if (pending?.nextState && typeof pending.nextState === "object") {
 				saveStateToFile(getStatePath(), previousState);
 			}
 			setOmError(describeAsyncError(error), "rollover", { notify: true });
@@ -1451,6 +1538,7 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 			lastRolloverReason = decision.reason || reason;
 			savePendingSwitch(bundle.pendingRecord, process.cwd());
 			pendingSessionSwitchToken = token;
+			lastPendingSwitchRefreshBytes = currentBytes;
 
 			// Experience generation now happens immediately after observation writes,
 			// not during rollover/archive handling.
@@ -2294,7 +2382,7 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 		const nextOmError = lastOmError ? truncateInline(lastOmError, 72) : "";
 		let nextOmStatus = "";
 		if (sessionRolloverInFlight || pendingSessionSwitchToken) {
-			nextOmStatus = pendingSessionSwitchToken ? "session-switch" : "rollover";
+			nextOmStatus = pendingSessionSwitchToken ? "switch-ready" : "rollover";
 		} else if (reflectionInFlight && reflectionAttemptState) {
 			nextOmStatus = `reflect ${reflectionAttemptState.attempt}/${reflectionAttemptState.maxAttempts}`;
 		} else if (observationInFlight && observationAttemptState) {
@@ -2793,6 +2881,7 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 		lastBranchMessageEntries = [];
 		sessionRolloverInFlight = false;
 		pendingSessionSwitchToken = null;
+		lastPendingSwitchRefreshBytes = 0;
 		lastSessionFileSizeBytes = 0;
 		lastProjectedHotSessionBytes = 0;
 		lastRolloverReason = "";
@@ -3076,7 +3165,20 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 				}
 			}
 
-			await maybeStageSessionRollover(ctx, "agent_end", false);
+			const pendingSwitch = resolvePendingSwitchRecord(ctx);
+			// ponytail: event ctx cannot switch sessions; keep the staged target fresh instead.
+			if (pendingSwitch) {
+				try {
+					refreshPendingHotSession(ctx, pendingSwitch.pending, "agent_end");
+				} catch (error) {
+					appendDiagnostic("warning", "rollover", "Failed to refresh pending OM hot-session rollover", {
+						token: pendingSwitch.token,
+						error: describeAsyncError(error),
+					});
+				}
+			} else {
+				await maybeStageSessionRollover(ctx, "agent_end", false);
+			}
 		})();
 	});
 
@@ -3283,6 +3385,7 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 		lastBranchMessageEntries = [];
 		pendingExperienceContext = null;
 		pendingSessionSwitchToken = null;
+		lastPendingSwitchRefreshBytes = 0;
 		currentActivityStatus = "";
 		lastFullMessages = [];
 		codexQuotaProbeInFlight = null;
@@ -3312,19 +3415,6 @@ export default function observationalMemoryExtension(pi: ExtensionAPI): void {
 	});
 
 	// ─── COMMANDS: /om ──────────────────────────────────────────────────────────
-	pi.registerCommand("session-switch", {
-		description: "Internal OM hot-session switch command. Usage: /session-switch <token>",
-		handler: async (args: any, ctx: any) => {
-			rememberContext(ctx);
-			const token = String(args || "").trim();
-			if (!token) {
-				await ctx.ui.notify("Usage: /session-switch <token>", "warning");
-				return;
-			}
-			await runPendingSessionSwitch(ctx, token);
-		},
-	});
-
 	pi.registerCommand("om", {
 		description: "Inspect or manage observational memory. Usage: /om [status|show|observe|reset|compact|rollover|switch|replay|experiences|compare]",
 		handler: async (args: any, ctx: any) => {
